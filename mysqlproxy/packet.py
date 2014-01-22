@@ -62,8 +62,9 @@ class IncomingPacketChain(object):
 
 
 class OutgoingPacketChain(object):
-    def __init__(self):
+    def __init__(self, start_seq_id=0):
         self.fields = []
+        self.start_seq_id = start_seq_id
 
     def add_field(self, field):
         """
@@ -88,7 +89,7 @@ class OutgoingPacketChain(object):
         # TODO: impl is just outright terrible.
         # Fix it in any way shape or form i don't care
         sio = StringIO()
-        seq_id = 0
+        seq_id = self.start_seq_id
         net_total_written = 0
         total_written = 0
         last_total_written = 0xffffff
@@ -99,11 +100,15 @@ class OutgoingPacketChain(object):
             if total_written >= 0xffffff:
                 self._write_packet_header(0xffffff, seq_id, fde)
                 fde.write(sio.read(0xffffff))
+                remaining_bytes = sio.read()
+                sio.close()
+                sio = StringIO(remaining_bytes)
                 last_total_written = total_written
                 total_written -= 0xffffff
                 seq_id += 1
         if last_total_written == 0xffffff:
             self._write_packet_header(total_written, seq_id, fde)
+            sio.seek(0)
             fde.write(sio.read(total_written))
             net_total_written += total_written
         return net_total_written
@@ -114,9 +119,10 @@ class Packet(object):
     Interface class for extracting fields expected out of a single packet
     or writing them out in order.
     """
-    def __init__(self, capabilities):
+    def __init__(self, capabilities, **kwargs):
         self.capabilities = capabilities
         self.fields = []
+        self.seq_id = kwargs.pop('seq_id', 0)
 
     def read_in(self, fde):
         """
@@ -133,7 +139,7 @@ class Packet(object):
         """
         Generic write-out of all fields
         """
-        opc = OutgoingPacketChain()
+        opc = OutgoingPacketChain(start_seq_id=self.seq_id)
         for field in self.fields:
             opc.add_field(field)
         return opc.write_out(fde)
@@ -143,10 +149,10 @@ class OKPacket(Packet):
     """
     Generic OK packet, will most likely not be read in
     """
-    def __init__(self, capability_flags, **kwargs):
-        super(OKPacket, self).__init__(capability_flags)
-        self.affected_rows = kwargs.pop('affected_rows', 0)
-        self.last_insert_id = kwargs.pop('last_insert_id', 0)
+    def __init__(self, capability_flags, affected_rows, last_insert_id, **kwargs):
+        super(OKPacket, self).__init__(capability_flags, **kwargs)
+        self.affected_rows = affected_rows
+        self.last_insert_id = last_insert_id
         use_41 = capability_flags & capabilities.PROTOCOL_41
         transactions = capability_flags & capabilities.TRANSACTIONS
         if use_41 or transactions:
@@ -154,8 +160,8 @@ class OKPacket(Packet):
             self.warnings = kwargs.pop('warnings', 0)
         self.fields = [
             FixedLengthInteger(1, 0), # OK header
-            LengthEncodedInteger(self.affected_rows),
-            LengthEncodedInteger(self.last_insert_id)
+            LengthEncodedInteger(affected_rows),
+            LengthEncodedInteger(last_insert_id)
             ]
         if use_41:
             self.fields += [
@@ -171,6 +177,33 @@ class ERRPacket(Packet):
     """
     Error packet
     """
-    def __init__(self, capability_flags, **kwargs):
-        super(ERRPacket, self).__init__(capability_flags)
+    def __init__(self, capability_flags, error_code, error_msg, **kwargs):
+        super(ERRPacket, self).__init__(capability_flags, **kwargs)
+        self.error_code = error_code
+        self.error_msg = error_msg
+        self.fields = [
+            FixedLengthInteger(1, 0xff), # ERR header
+            FixedLengthInteger(2, error_code)
+            ]
+        if capability_flags & capabilities.PROTOCOL_41:
+            self.fields += [
+                FixedLengthString(1, '#'),
+                FixedLengthString(5, kwargs.pop('sql_state', 'HY000'))
+                ]
+        self.fields.append(RestOfPacketString(self.error_msg))
 
+
+class EOFPacket(Packet):
+    """
+    EOF Packet
+    """
+    def __init__(self, capability_flags, **kwargs):
+        super(EOFPacket, self).__init__(capability_flags, **kwargs)
+        self.fields = [
+            FixedLengthInteger(1, 0xfe) # EOF header
+            ]
+        if capability_flags & capabilities.PROTOCOL_41:
+            self.fields += [
+                FixedLengthInteger(2, kwargs.pop('warnings', 0)),
+                FixedLengthInteger(2, kwargs.pop('status_flags', 0))
+                ]

@@ -21,7 +21,7 @@ class MySQLDataType(object):
     Generic for a data type found in a payload
     """
     def __init__(self):
-        self.val = None
+        self.val = b''
         self.length = 0
 
     def read_in(self, fstream):
@@ -63,25 +63,31 @@ class RestOfPacketString(MySQLDataType):
     """
     AKA the EOF string
     """
+    def __init__(self, val):
+        self.val = bytes(val)
+        self.length = len(self.val)
+
     def read_in(self, fde):
         """
         EOF strings read the rest of the packet
         """
         self.val = bytes(fde.read())
         self.length = len(self.val)
+        return self.length
 
     def write_out(self, fde):
         """
         Write out
         """
         fde.write(bytes(self.val))
+        return len(bytes(self.val))
 
 
 class NulTerminatedString(MySQLDataType):
     """
     Null-terminated C-style string
     """
-    def __init__(self, val = None):
+    def __init__(self, val=None):
         super(NulTerminatedString, self).__init__()
         if val != None and type(val) != unicode:
             raise ValueError('NulTerminatedString initial val must be unicode')

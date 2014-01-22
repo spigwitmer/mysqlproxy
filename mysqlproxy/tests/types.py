@@ -1,35 +1,8 @@
-#!/usr/bin/env python
-
+"""
+Data type unit tests
+"""
 import unittest
 from StringIO import StringIO
-
-class PacketChainTest(unittest.TestCase):
-    """
-    Test MySQL protocol packet read-ins, both single and multi
-    """
-    def runTest(self):
-        """
-        Single/multi packet processing
-        """
-        from mysqlproxy.packet import IncomingPacketChain
-
-        proto_buf = StringIO(b'\x01\x00\x00\x00\x01')
-        pchain = IncomingPacketChain()
-        pchain.read_in(proto_buf)
-        self.assertEquals(pchain.chain_length, 1)
-        self.assertEquals(pchain.packet_meta[0].length, 1)
-        self.assertEquals(pchain.payload.read(), b'\x01')
-        self.assertEquals(pchain.total_length, 1)
-
-        proto_buf = StringIO(b'\xff\xff\xff\x00' + b'\xcc'*0xffffff + b'\x00\x00\x00\x01')
-        pchain = IncomingPacketChain()
-        pchain.read_in(proto_buf)
-        self.assertEquals(pchain.chain_length, 2)
-        self.assertEquals(len(pchain.packet_meta), 2)
-        self.assertEquals(pchain.packet_meta[0].length, 16777215)
-        self.assertEquals(pchain.packet_meta[1].length, 0)
-        self.assertEquals(pchain.total_length, 0xffffff)
-
 
 class IntegerTest(unittest.TestCase):
     """
@@ -83,6 +56,3 @@ class FixedLengthIntegerTest(unittest.TestCase):
         fli.write_out(proto_buf)
         self.assertEqual(proto_buf.getvalue(), b'\x01\x00\x00')
 
-
-if __name__ == '__main__':
-    unittest.main()
