@@ -132,7 +132,7 @@ class Packet(object):
         ipc.read_in(fde)
         read_length = 0
         for field in self.fields:
-            read_length += field.read_in(fde)
+            read_length += field.read_in(ipc.payload)
         return read_length
 
     def write_out(self, fde):

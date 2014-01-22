@@ -4,6 +4,15 @@ Protocol wire types
 import struct
 from StringIO import StringIO
 
+__all__ = [
+    'MySQLDataType',
+    'FixedLengthString',
+    'RestOfPacketString',
+    'NulTerminatedString',
+    'FixedLengthInteger',
+    'LengthEncodedInteger'
+    ]
+
 def fixed_length_byte_val(size, inbytes):
     """
     Integer value of fixed length integer with size 
@@ -92,13 +101,16 @@ class NulTerminatedString(MySQLDataType):
         if val != None and type(val) != unicode:
             raise ValueError('NulTerminatedString initial val must be unicode')
         self.val = val
+        self.length = len(val) + 1
 
     def read_in(self, fstream):
-        self.length = 0
+        self.length = 1
+        self.val = b''
         onebyte = bytes(fstream.read(1))
         while onebyte != b'\x00':
             self.val += onebyte
             self.length += 1
+            onebyte = bytes(fstream.read(1))
         return self.length
 
     def write_out(self, fstream):
@@ -117,6 +129,7 @@ class FixedLengthInteger(MySQLDataType):
 
     def read_in(self, fstream):
         self.val = fixed_length_byte_val(self.length, fstream.read(self.length))
+        return self.length
 
     def write_out(self, fstream=None):
         val = self.val
