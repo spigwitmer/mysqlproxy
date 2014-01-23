@@ -10,7 +10,8 @@ __all__ = [
     'RestOfPacketString',
     'NulTerminatedString',
     'FixedLengthInteger',
-    'LengthEncodedInteger'
+    'LengthEncodedInteger',
+    'KeyValueList'
     ]
 
 def fixed_length_byte_val(size, inbytes):
@@ -118,6 +119,24 @@ class NulTerminatedString(MySQLDataType):
         return self.length
 
 
+class LengthEncodedString(MySQLDataType):
+    def __init__(self, val=u''):
+        self.val = val
+        self.length = LengthEncodedInteger(len(val)).length + len(val)
+
+    def read_in(self, net_fd):
+        str_length = LengthEncodedInteger(0)
+        total_read = str_length.read_in(net_fd)
+        actual_str = FixedLengthString(str_length.val, u'')
+        total_read += actual_str.read_in(net_fd)
+        self.val = actual_str.val
+        self.length = total_read
+        return total_read
+
+    def write_out(self, net_fd):
+        return LengthEncodedInteger(len(self.val)).write_out(net_fd) \
+                + FixedLengthString(len(self.val), val).write_out(net_fd)
+
 class FixedLengthInteger(MySQLDataType):
     """
     Integer of static size
@@ -189,3 +208,27 @@ class LengthEncodedInteger(MySQLDataType):
             write_buf += bytes(chr(0xfe) + struct.pack('<Q', self.val))
         fstream.write(write_buf)
         return len(write_buf)
+
+
+class KeyValueList(MySQLDataType):
+    """
+    Key value list (from handshake response packet)
+    """
+    def __init__(self, val={}):
+        super(KeyValueList, self).__init__()
+        self.val = val
+
+    def read_in(self, net_fd):
+        kv_size = LengthEncodedInteger(0)
+        kv_read = 0
+        total_read = kv_size.read_in(net_fd)
+        while kv_read < kv_size.val:
+            key = LengthEncodedString(u'')
+            kv_read += key.read_in(net_fd)
+            val = LengthEncodedString(u'')
+            kv_read += val.read_in(net_fd)
+            self.val[key.val] = val.val
+        return total_read + kv_read
+
+    def write_out(self, net_fd):
+        raise NotImplemented

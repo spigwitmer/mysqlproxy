@@ -130,10 +130,18 @@ class Packet(object):
         """
         ipc = IncomingPacketChain()
         ipc.read_in(fde)
+        return self.read_in_internal(ipc.payload)
+
+    def read_in_internal(self, pl_fd):
+        """
+        This is what you actually want to extend to 
+        do custom payload reading
+        """
         read_length = 0
-        for field in self.fields:
-            read_length += field.read_in(ipc.payload)
+        for _, field in self.fields:
+            read_length += field.read_in(pl_fd)
         return read_length
+
 
     def write_out(self, fde):
         """
@@ -159,18 +167,18 @@ class OKPacket(Packet):
             self.status_flags = kwargs.pop('status_flags', 0)
             self.warnings = kwargs.pop('warnings', 0)
         self.fields = [
-            FixedLengthInteger(1, 0), # OK header
-            LengthEncodedInteger(affected_rows),
-            LengthEncodedInteger(last_insert_id)
+            ('ok_header', FixedLengthInteger(1, 0)), # OK header
+            ('affected_rows', LengthEncodedInteger(affected_rows)),
+            ('last_insert_id', LengthEncodedInteger(last_insert_id))
             ]
         if use_41:
             self.fields += [
-                FixedLengthInteger(2, self.status_flags),
-                FixedLengthInteger(2, self.warnings)
+                ('status_flags', FixedLengthInteger(2, self.status_flags)),
+                ('warnings', FixedLengthInteger(2, self.warnings))
                 ]
         elif transactions:
-            self.fields.append(FixedLengthInteger(2, self.status_flags))
-        self.fields.append(RestOfPacketString("k thanks"))
+            self.fields.append(('status_flags', FixedLengthInteger(2, self.status_flags)))
+        self.fields.append(('ok_message', RestOfPacketString("k thanks")))
 
 
 class ERRPacket(Packet):
@@ -182,15 +190,15 @@ class ERRPacket(Packet):
         self.error_code = error_code
         self.error_msg = error_msg
         self.fields = [
-            FixedLengthInteger(1, 0xff), # ERR header
-            FixedLengthInteger(2, error_code)
+            ('err_header', FixedLengthInteger(1, 0xff)), # ERR header
+            ('error_code', FixedLengthInteger(2, error_code))
             ]
         if capability_flags & capabilities.PROTOCOL_41:
             self.fields += [
-                FixedLengthString(1, '#'),
-                FixedLengthString(5, kwargs.pop('sql_state', 'HY000'))
+                ('sql_state_flag', FixedLengthString(1, '#')),
+                ('sql_state', FixedLengthString(5, kwargs.pop('sql_state', 'HY000')))
                 ]
-        self.fields.append(RestOfPacketString(self.error_msg))
+        self.fields.append(('error_msg', RestOfPacketString(self.error_msg)))
 
 
 class EOFPacket(Packet):
@@ -200,10 +208,10 @@ class EOFPacket(Packet):
     def __init__(self, capability_flags, **kwargs):
         super(EOFPacket, self).__init__(capability_flags, **kwargs)
         self.fields = [
-            FixedLengthInteger(1, 0xfe) # EOF header
+            ('eof_header', FixedLengthInteger(1, 0xfe)) # EOF header
             ]
         if capability_flags & capabilities.PROTOCOL_41:
             self.fields += [
-                FixedLengthInteger(2, kwargs.pop('warnings', 0)),
-                FixedLengthInteger(2, kwargs.pop('status_flags', 0))
+                ('warnings', FixedLengthInteger(2, kwargs.pop('warnings', 0))),
+                ('status_flags', FixedLengthInteger(2, kwargs.pop('status_flags', 0)))
                 ]
