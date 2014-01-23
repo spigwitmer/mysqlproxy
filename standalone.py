@@ -10,7 +10,7 @@ s.bind(('127.0.0.1', 5595))
 s.listen(0)
 
 incoming, (remote_host, remote_port) = s.accept()
-fsock = incoming.makefile()
+fsock = incoming.makefile('r+b', bufsize=0)
 
 try:
     session = Session(fsock)

@@ -1,0 +1,33 @@
+"""
+ResultSet column types
+"""
+DECIMAL     = 0x0
+TINY        = 0x1
+SHORT       = 0x2
+LONG        = 0x3
+FLOAT       = 0x4
+DOUBLE      = 0x5
+NULL        = 0x6
+TIMESTAMP   = 0x7
+LONGLONG    = 0x8
+INT24       = 0x9
+DATE        = 0xa
+TIME        = 0xb
+DATETIME    = 0xc
+YEAR        = 0xd
+NEWDATE     = 0xe
+VARCHAR     = 0xf
+BIT         = 0x10
+TIMESTAMP2  = 0x11
+DATETIME2   = 0x12
+TIME2       = 0x13
+NEWDECIMAL  = 0xf6
+ENUM        = 0xf7
+SET         = 0xf8
+TINY_BLOB   = 0xf9
+MEDIUM_BLOB = 0xfa
+LONG_BLOB   = 0xfb
+BLOB        = 0xfc
+VAR_STRING  = 0xfd
+STRING      = 0xfe
+GEOMETRY    = 0xff

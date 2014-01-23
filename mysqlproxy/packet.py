@@ -27,6 +27,7 @@ class IncomingPacketChain(object):
     """
     def __init__(self):
         self.packet_meta = []
+        self.seq_id = 0
         self.payload = None
 
     def read_in(self, fde):
@@ -45,6 +46,7 @@ class IncomingPacketChain(object):
             self.payload.write(cur_payload.val)
             self.packet_meta.append(PacketMeta(packet_length.val, seq_id.val))
             total_read += packet_length.val
+        self.seq_id = seq_id.val
         self.payload.seek(0)
         return total_read
 
@@ -114,7 +116,7 @@ class OutgoingPacketChain(object):
             sio.seek(0)
             fde.write(sio.read(total_written))
             net_total_written += total_written
-        return net_total_written
+        return (net_total_written, seq_id)
 
 
 class Packet(object):
@@ -133,9 +135,10 @@ class Packet(object):
         """
         ipc = IncomingPacketChain()
         ipc.read_in(fde)
-        return self.read_in_internal(ipc.payload)
+        self.seq_id = ipc.seq_id
+        return self.read_in_internal(ipc.payload, ipc.total_length)
 
-    def read_in_internal(self, pl_fd):
+    def read_in_internal(self, pl_fd, packet_size):
         """
         This is what you actually want to extend to 
         do custom payload reading
@@ -190,7 +193,8 @@ class OKPacket(Packet):
                 ]
         elif transactions:
             self.fields.append(('status_flags', FixedLengthInteger(2, self.status_flags)))
-        self.fields.append(('ok_message', RestOfPacketString("k thanks")))
+        ok_message = kwargs.pop('info', 'k thanks')
+        self.fields.append(('ok_message', RestOfPacketString(ok_message)))
 
 
 class ERRPacket(Packet):

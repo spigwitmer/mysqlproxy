@@ -3,7 +3,7 @@ class responsible for IO and
 session state.
 """
 from mysqlproxy.packet import OKPacket, ERRPacket, Packet, \
-        IncomingPacketChain, OutgoingPacketChain
+        IncomingPacketChain
 from mysqlproxy.types import *
 from mysqlproxy import capabilities, cli_commands
 from random import randint
@@ -20,8 +20,8 @@ def generate_nonce(nsize=20):
     return ''.join([chr(randint(1, 255)) for _ in range(0, nsize)])
 
 class HandshakeV10(Packet):
-    def __init__(self, server_capabilities, nonce):
-        super(HandshakeV10, self).__init__(0)
+    def __init__(self, server_capabilities, nonce, **kwargs):
+        super(HandshakeV10, self).__init__(0, **kwargs)
         # TODO: is server_capabilities even needed?
         server_capabilities = SERVER_CAPABILITIES
         self.server_capabilities = server_capabilities
@@ -44,8 +44,8 @@ class HandshakeV10(Packet):
 
 
 class HandshakeResponse(Packet):
-    def __init__(self):
-        super(HandshakeResponse, self).__init__(0)
+    def __init__(self, **kwargs):
+        super(HandshakeResponse, self).__init__(0, **kwargs)
         self.fields = [ # these 5 fields will be in the payload regardless
             ('client_capabilities', FixedLengthInteger(4, 0)),
             ('max_packet_size', FixedLengthInteger(4, 0)),
@@ -54,11 +54,11 @@ class HandshakeResponse(Packet):
             ('username', NulTerminatedString(u''))
             ]
 
-    def read_in_internal(self, pl_fd):
+    def read_in_internal(self, pl_fd, packet_size):
         """
         Read in variable size auth response, followed by dbase + auth plugin name
         """
-        read_length = super(HandshakeResponse, self).read_in_internal(pl_fd)
+        read_length = super(HandshakeResponse, self).read_in_internal(pl_fd, packet_size)
         client_caps = self.get_field('client_capabilities').val
         if client_caps & capabilities.SECURE_CONNECTION:
             auth_resp_len = FixedLengthInteger(1, 0)
@@ -75,13 +75,13 @@ class HandshakeResponse(Packet):
             db_name = NulTerminatedString(u'')
             read_length += db_name.read_in(pl_fd)
             self.fields.append(('db_name', db_name))
-        if client_caps & capabilities.PLUGIN_AUTH:
-            # LOL
+        if client_caps & capabilities.PLUGIN_AUTH and packet_size - read_length > 0:
+            # some asshole clients respond with the PLUGIN_AUTH
+            # capability even though we explicitly clear that
+            # flag in our own handshake.
             plugin_auth_name = NulTerminatedString(u'')
             read_length += plugin_auth_name.read_in(pl_fd)
             self.fields.append(('plugin_auth_name', plugin_auth_name))
-            # we told the client we don't support PLUGIN_AUTH but it sends it to us anyway
-            print 'client seriously using PLUGIN_AUTH (%s) why the fuck is the client sending this?' % plugin_auth_name.val
         if client_caps & capabilities.CONNECT_ATTRS:
             client_attrs = KeyValueList({})
             read_length += client_attrs.read_in(pl_fd)
@@ -102,9 +102,8 @@ class Session(object):
         self.default_db = None
         self.client_capabilities = 0
         self.server_capabilities = SERVER_CAPABILITIES
-        if self.do_handshake():
+        if self.do_handshake(): # TODO refactor
             self.serve_forever()
-
 
     def send_payload(self, what):
         """
@@ -112,13 +111,16 @@ class Session(object):
         `what` may be a single packet of list of packets
         """
         nbytes = 0
+        last_seq_id = 0
         if type(what) == list:
             for field in what:
-                nbytes += field.write_out(self.net_fd)
+                more_bytes, last_seq_id = field.write_out(self.net_fd)
+                nbytes += more_bytes
         else:
-            nbytes += what.write_out(self.net_fd)
+            more_bytes, last_seq_id = what.write_out(self.net_fd)
+            nbytes += more_bytes
         self.net_fd.flush()
-        return nbytes
+        return (nbytes, last_seq_id)
 
     def serve_forever(self):
         """
@@ -126,8 +128,13 @@ class Session(object):
         """
         while self.connected:
             cmd_packet = self.get_next_client_command()
+            if not cli_commands.handle_client_command(self, cmd_packet):
+                try:
+                    self.net_fd.close()
+                except:
+                    pass
+                self.connected = False
             
-
     def get_next_client_command(self):
         """
         Read next packet in.  This should only
@@ -138,7 +145,7 @@ class Session(object):
         ipc.read_in(self.net_fd)
         return ipc.payload.read()
 
-    def init_and_authenticate(self, nonce, response):
+    def _init_and_authenticate(self, nonce, response):
         """
         Store client capabilities and do auth stuff
         """
@@ -147,7 +154,7 @@ class Session(object):
         username = response.get_field('username').val
         auth_response = response.get_field('auth_response').val
 
-        #XXX something about LDAP?
+        #XXX what about LDAP again?
         valid_users = {
             'root': 'l33t',
             'pat': 'lolwut'
@@ -166,13 +173,13 @@ class Session(object):
         Send handshake, get handshake, something like that
         """
         nonce = generate_nonce()
-        handshake_pkt = HandshakeV10(0, nonce)
+        handshake_pkt = HandshakeV10(0, nonce, seq_id=0)
         handshake_pkt.write_out(self.net_fd)
         self.net_fd.flush()
         response = HandshakeResponse()
-        import pdb; pdb.set_trace()
         response.read_in(self.net_fd)
-        authenticated, client_caps = self.init_and_authenticate(nonce, response)
+        print 'response seq id: %d' % response.seq_id # it better be 1
+        authenticated, client_caps = self._init_and_authenticate(nonce, response)
         if authenticated:
             resp_pkt = OKPacket(client_caps,
                 affected_rows=0,
