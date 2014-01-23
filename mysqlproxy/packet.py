@@ -7,6 +7,11 @@ from mysqlproxy.types import FixedLengthInteger, \
 from mysqlproxy import capabilities
 from StringIO import StringIO
 
+__all__ = [
+    'PacketMeta', 'IncomingPacketChain', 'OutgoingPacketChain',
+    'Packet', 'OKPacket', 'ERRPacket', 'EOFPacket'
+    ]
+
 class PacketMeta(object):
     """
     Useful packet metadata for chains
@@ -148,9 +153,19 @@ class Packet(object):
         Generic write-out of all fields
         """
         opc = OutgoingPacketChain(start_seq_id=self.seq_id)
-        for field in self.fields:
+        for _, field in self.fields:
             opc.add_field(field)
         return opc.write_out(fde)
+
+
+    def get_field(self, field_of_interest):
+        """
+        Return first field going by name `field_of_interest`
+        """
+        for field_name, field in self.fields:
+            if field_name == field_of_interest:
+                return field
+        raise ValueError('field name %s does not exist' % field_of_interest)
 
 
 class OKPacket(Packet):

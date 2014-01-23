@@ -219,6 +219,7 @@ class KeyValueList(MySQLDataType):
         self.val = val
 
     def read_in(self, net_fd):
+        import pdb; pdb.set_trace()
         kv_size = LengthEncodedInteger(0)
         kv_read = 0
         total_read = kv_size.read_in(net_fd)

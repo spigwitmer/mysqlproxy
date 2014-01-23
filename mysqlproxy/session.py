@@ -2,11 +2,19 @@
 class responsible for IO and
 session state.
 """
-from mysqlproxy.packet import OKPacket, ERRPacket, Packet, IncomingPacketChain
+from mysqlproxy.packet import OKPacket, ERRPacket, Packet, \
+        IncomingPacketChain, OutgoingPacketChain
 from mysqlproxy.types import *
-from mysqlproxy import capabilities
+from mysqlproxy import capabilities, cli_commands
 from random import randint
 from mysqlproxy import error_codes as errs
+from hashlib import sha1
+
+SERVER_CAPABILITIES = capabilities.PROTOCOL_41 \
+        | capabilities.INTERACTIVE \
+        | capabilities.SECURE_CONNECTION \
+        | capabilities.CONNECT_WITH_DB \
+        | capabilities.CONNECT_ATTRS
 
 def generate_nonce(nsize=20):
     return ''.join([chr(randint(1, 255)) for _ in range(0, nsize)])
@@ -14,10 +22,8 @@ def generate_nonce(nsize=20):
 class HandshakeV10(Packet):
     def __init__(self, server_capabilities, nonce):
         super(HandshakeV10, self).__init__(0)
-        server_capabilities |= capabilities.PROTOCOL_41 | \
-            capabilities.INTERACTIVE | \
-            capabilities.SECURE_CONNECTION | \
-            capabilities.CONNECT_WITH_DB
+        # TODO: is server_capabilities even needed?
+        server_capabilities = SERVER_CAPABILITIES
         self.server_capabilities = server_capabilities
         self.nonce = nonce
         # forcing mysql_native_password as auth method
@@ -40,7 +46,7 @@ class HandshakeV10(Packet):
 class HandshakeResponse(Packet):
     def __init__(self):
         super(HandshakeResponse, self).__init__(0)
-        self.fields = [
+        self.fields = [ # these 5 fields will be in the payload regardless
             ('client_capabilities', FixedLengthInteger(4, 0)),
             ('max_packet_size', FixedLengthInteger(4, 0)),
             ('charset', FixedLengthInteger(1, 0)),
@@ -53,7 +59,7 @@ class HandshakeResponse(Packet):
         Read in variable size auth response, followed by dbase + auth plugin name
         """
         read_length = super(HandshakeResponse, self).read_in_internal(pl_fd)
-        client_caps = self.fields[0].val
+        client_caps = self.get_field('client_capabilities').val
         if client_caps & capabilities.SECURE_CONNECTION:
             auth_resp_len = FixedLengthInteger(1, 0)
             read_length += auth_resp_len.read_in(pl_fd)
@@ -69,17 +75,17 @@ class HandshakeResponse(Packet):
             db_name = NulTerminatedString(u'')
             read_length += db_name.read_in(pl_fd)
             self.fields.append(('db_name', db_name))
-            print 'client selecting db: %s' % db_name.val
         if client_caps & capabilities.PLUGIN_AUTH:
+            # LOL
             plugin_auth_name = NulTerminatedString(u'')
             read_length += plugin_auth_name.read_in(pl_fd)
             self.fields.append(('plugin_auth_name', plugin_auth_name))
-            print 'client using PLUGIN_AUTH (%s), why the fuck is the client asking for this' % plugin_auth_name.val
+            # we told the client we don't support PLUGIN_AUTH but it sends it to us anyway
+            print 'client seriously using PLUGIN_AUTH (%s) why the fuck is the client sending this?' % plugin_auth_name.val
         if client_caps & capabilities.CONNECT_ATTRS:
             client_attrs = KeyValueList({})
             read_length += client_attrs.read_in(pl_fd)
             self.fields.append(('client_attrs', client_attrs))
-            print 'client sent connect attrs: %s' % client_attrs.val
         return read_length
 
 
@@ -87,23 +93,67 @@ class Session(object):
     def __init__(self, fde):
         self.net_fd = fde
         self.connected = True
-        self.resolve_handshake()
-        self.disconnect()
+        self.default_db = None
+        self.client_capabilities = 0
+        self.server_capabilities = SERVER_CAPABILITIES
+        if self.do_handshake():
+            self.serve_forever()
 
-    def authenticate(self, nonce, response):
-        cap_flags = response.fields[0].val
-        return False, cap_flags
 
-    def resolve_handshake(self):
+    def send_payload(self, what):
+        opc = OutgoingPacketChain()
+        if type(what) == list:
+            for field in what:
+                opc.add_field(what)
+        else:
+            opc.add_field(what)
+        return opc.write_out(self.net_fd)
+
+    def serve_forever(self):
+        """
+        Client command loop
+        """
+        while self.connected:
+            cmd_packet = self.get_next_client_command()
+            
+
+    def get_next_client_command(self):
+        """
+        Read next packet in.  This should only
+        be called after a successful handshake
+        with the client.
+        """
+        ipc = IncomingPacketChain()
+        ipc.read_in(self.net_fd)
+        return ipc.payload.read()
+
+    def init_and_authenticate(self, nonce, response):
+        cap_flags = response.get_field('client_capabilities').val
+        self.client_capabilities = cap_flags
+        username = response.get_field('username').val
+        auth_response = response.get_field('auth_response').val
+
+        #XXX something about LDAP?
+        valid_users = {
+            'root': 'l33t',
+            'pat': 'lolwut'
+            }
+        if username not in valid_users:
+            return False, cap_flags
+
+        passwd_sha = sha1(valid_users[username]).digest()
+        hashed_nonce = sha1(nonce + sha1(passwd_sha).digest()).digest()
+        expected_auth_response = ''.join([chr(ord(passwd_sha[x]) ^ ord(hashed_nonce[x])) for x in range(0, 20)])
+        return expected_auth_response == auth_response, cap_flags
+
+    def do_handshake(self):
         nonce = generate_nonce()
         handshake_pkt = HandshakeV10(0, nonce)
         handshake_pkt.write_out(self.net_fd)
         self.net_fd.flush()
-        print 'wrote out server handshake'
         response = HandshakeResponse()
         response.read_in(self.net_fd)
-        print 'got client response'
-        authenticated, client_caps = self.authenticate(nonce, response)
+        authenticated, client_caps = self.init_and_authenticate(nonce, response)
         if authenticated:
             resp_pkt = OKPacket(client_caps,
                 affected_rows=0,
