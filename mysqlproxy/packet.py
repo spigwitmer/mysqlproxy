@@ -36,12 +36,10 @@ class IncomingPacketChain(object):
         total_read = 0
         packet_length = FixedLengthInteger(3, 0xffffff)
         seq_id = FixedLengthInteger(1)
+        self.payload = StringIO()
         while packet_length.val == 0xffffff:
-            packet_length = FixedLengthInteger(3)
             packet_length.read_in(fde)
             seq_id.read_in(fde)
-            if packet_length.val > 0 and not self.payload:
-                self.payload = StringIO()
             cur_payload = FixedLengthString(packet_length.val)
             cur_payload.read_in(fde)
             self.payload.write(cur_payload.val)
@@ -156,7 +154,6 @@ class Packet(object):
         for _, field in self.fields:
             opc.add_field(field)
         return opc.write_out(fde)
-
 
     def get_field(self, field_of_interest):
         """

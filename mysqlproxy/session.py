@@ -90,6 +90,12 @@ class HandshakeResponse(Packet):
 
 
 class Session(object):
+    """
+    MySQL session wrapper for a file-like.
+    This assumes that the given file-like will
+    always act as a FIFO (a.k.a. if you're going through UDP,
+    do your own packet mangling).
+    """
     def __init__(self, fde):
         self.net_fd = fde
         self.connected = True
@@ -101,13 +107,18 @@ class Session(object):
 
 
     def send_payload(self, what):
-        opc = OutgoingPacketChain()
+        """
+        Write out given packets and flush socket
+        `what` may be a single packet of list of packets
+        """
+        nbytes = 0
         if type(what) == list:
             for field in what:
-                opc.add_field(what)
+                nbytes += field.write_out(self.net_fd)
         else:
-            opc.add_field(what)
-        return opc.write_out(self.net_fd)
+            nbytes += what.write_out(self.net_fd)
+        self.net_fd.flush()
+        return nbytes
 
     def serve_forever(self):
         """
@@ -128,6 +139,9 @@ class Session(object):
         return ipc.payload.read()
 
     def init_and_authenticate(self, nonce, response):
+        """
+        Store client capabilities and do auth stuff
+        """
         cap_flags = response.get_field('client_capabilities').val
         self.client_capabilities = cap_flags
         username = response.get_field('username').val
@@ -143,15 +157,20 @@ class Session(object):
 
         passwd_sha = sha1(valid_users[username]).digest()
         hashed_nonce = sha1(nonce + sha1(passwd_sha).digest()).digest()
-        expected_auth_response = ''.join([chr(ord(passwd_sha[x]) ^ ord(hashed_nonce[x])) for x in range(0, 20)])
+        expected_auth_response = \
+                ''.join([chr(ord(passwd_sha[x]) ^ ord(hashed_nonce[x])) for x in range(0, 20)])
         return expected_auth_response == auth_response, cap_flags
 
     def do_handshake(self):
+        """
+        Send handshake, get handshake, something like that
+        """
         nonce = generate_nonce()
         handshake_pkt = HandshakeV10(0, nonce)
         handshake_pkt.write_out(self.net_fd)
         self.net_fd.flush()
         response = HandshakeResponse()
+        import pdb; pdb.set_trace()
         response.read_in(self.net_fd)
         authenticated, client_caps = self.init_and_authenticate(nonce, response)
         if authenticated:
