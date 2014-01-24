@@ -89,6 +89,19 @@ class HandshakeResponse(Packet):
         return read_length
 
 
+class HandshakeFailed(Exception):
+    pass
+
+
+class Proxy(object):
+    """
+    MySQL proxy instance
+    This is what actually does brokering between
+    client and target db server.
+    """
+    pass
+
+
 class Session(object):
     """
     MySQL session wrapper for a file-like.

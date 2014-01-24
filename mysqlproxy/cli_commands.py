@@ -2,6 +2,8 @@
 Client to server command handling
 """
 from mysqlproxy.packet import ERRPacket, OKPacket
+from mysqlproxy.query_response import ResultSet, ResultSetRow, ColumnDefinition
+from mysqlproxy import column_types
 import sys
 import socket
 
@@ -54,7 +56,7 @@ def cli_command_quit(session, pkt_data, code):
     try:
         session.send_payload(OKPacket(
             session.client_capabilities, \
-            0, 0, seq_id=1, info='no come back :('))
+            0, 0, seq_id=1, info='no please come back :('))
     except socket.error:
         pass # the hell with it.  Some clients close prematurely anyway.
     return False
@@ -63,10 +65,19 @@ def cli_command_quit(session, pkt_data, code):
 def cli_command_query(session, pkt_data, code):
     query = pkt_data
     print 'Got query command: %s' % query
-    session.send_payload(OKPacket(
-        session.client_capabilities, \
-        affected_rows=0, last_insert_id=0, seq_id=1, info='You are beautiful'))
-    #session.send_payload(ERRPacket(
+
+    # XXX
+    version_comment = 'hurfdurf'
+    cd = ColumnDefinition('@@version_comment', column_types.VAR_STRING, len(version_comment), 33)
+    row = ResultSetRow(['hurfdurf'])
+    rs = ResultSet(session.client_capabilities, [cd], [row], seq_id=1)
+    sio = StringIO()
+    rs.write_out(sio)
+    sio.seek(0)
+    self.net_fd.write(sio.read())
+
+    #session.send_payload(rs)
+    #session.send_payload(OKPacket(
     #    session.client_capabilities, \
-    #        error_code=9998, error_msg='AM DO THINGS LOL', seq_id=1))
+    #    affected_rows=0, last_insert_id=0, seq_id=1, info=''))
     return True

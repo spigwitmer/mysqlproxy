@@ -8,6 +8,7 @@ __all__ = [
     'MySQLDataType',
     'FixedLengthString',
     'RestOfPacketString',
+    'LengthEncodedString',
     'NulTerminatedString',
     'FixedLengthInteger',
     'LengthEncodedInteger',
@@ -127,15 +128,21 @@ class LengthEncodedString(MySQLDataType):
     def read_in(self, net_fd):
         str_length = LengthEncodedInteger(0)
         total_read = str_length.read_in(net_fd)
-        actual_str = FixedLengthString(str_length.val, u'')
-        total_read += actual_str.read_in(net_fd)
-        self.val = actual_str.val
+        if str_length.val > 0:
+            actual_str = FixedLengthString(str_length.val, u'')
+            total_read += actual_str.read_in(net_fd)
+            self.val = actual_str.val
+        else:
+            self.val = u''
         self.length = total_read
         return total_read
 
     def write_out(self, net_fd):
-        return LengthEncodedInteger(len(self.val)).write_out(net_fd) \
-                + FixedLengthString(len(self.val), val).write_out(net_fd)
+        total_written = LengthEncodedInteger(len(self.val)).write_out(net_fd)
+        if len(self.val) > 0:
+            total_written += FixedLengthString(len(self.val), self.val).write_out(net_fd)
+        return total_written
+
 
 class FixedLengthInteger(MySQLDataType):
     """
@@ -147,7 +154,10 @@ class FixedLengthInteger(MySQLDataType):
         self.val = val
 
     def read_in(self, fstream):
-        self.val = fixed_length_byte_val(self.length, fstream.read(self.length))
+        bytes_read = fstream.read(self.length)
+        if len(bytes_read) != self.length:
+            raise ValueError('Expected %d bytes, got %d' % (self.length, len(bytes_read)))
+        self.val = fixed_length_byte_val(self.length, bytes_read)
         return self.length
 
     def write_out(self, fstream=None):
