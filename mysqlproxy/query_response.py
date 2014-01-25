@@ -10,10 +10,10 @@ from mysqlproxy import status_flags
 class ColumnDefinition(Packet):
     def __init__(self, name, column_type, column_length, charset_code, **kwargs):
         super(ColumnDefinition, self).__init__(0, **kwargs)
-        org_name = kwargs.pop('org_name', name)
+        org_name = kwargs.pop('org_name', u'')
         schema = kwargs.pop('schema', u'')
         table = kwargs.pop('table', u'')
-        org_table = kwargs.pop('org_table', table)
+        org_table = kwargs.pop('org_table', u'')
         decimals = kwargs.pop('decimals', 0)
         flags = kwargs.pop('flags', 0)
         show_default = kwargs.pop('show_default', False)

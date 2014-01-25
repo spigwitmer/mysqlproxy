@@ -12,8 +12,43 @@ COMMAND_CODES = {
     0x01: ('quit', 'cli_command_quit'),
     0x02: ('init_db', 'cli_change_db'),
     0x03: ('query', 'cli_command_query'),
-    #0x04: 'field_list'
+    0x04: ('field_list', 'cli_command_field_list'),
+    0x05: ('create_db', 'unsupported_client_command'),
+    0x06: ('drop_db', 'unsupported_client_command'),
+    0x07: ('refresh', 'unsupported_client_command'),
+    0x08: ('shutdown', 'unsupported_client_command'),
+    0x09: ('statistics', 'unsupported_client_command'),
+    0x0a: ('process_info', 'unsupported_client_command'),
+    0x0b: ('connect', 'unsupported_client_command'), # internal
+    0x0c: ('kill', 'unsupported_client_command'),
+    0x0d: ('debug', 'unsupported_client_command'),
+    0x0e: ('ping', 'cli_command_ping'),
+    0x0f: ('time', 'unsupported_client_command'), # internal
+    0x10: ('delayed_insert', 'unsupported_client_command'), # internal
+    0x11: ('change_user', 'unsupported_client_command'),
+    0x1f: ('reset_connection', 'unsupported_client_command'),
+    0x1d: ('daemon', 'unsupported_client_command'), # internal
 }
+
+def cli_command_ping(session_obj, pkt, code):
+    session_obj.send_payload(
+        OKPacket(
+            session_obj.client_capabilities,
+            0, 0, seq_id=1, info=u'PONG'
+            )
+        )
+    return True
+
+def unsupported_client_command(session_obj, pkt, code):
+    command_name = COMMAND_CODES[code]
+    session_obj.send_payload(
+        ERRPacket(
+            session_obj.client_capabilities,
+            error_code=9990,
+            error_msg=u'The "%s" is unsupported by mysqlproxy' % command_name,
+            seq_id=1
+        ))
+    return True
 
 
 def unknown_cli_command(session, pkt_data, code):
@@ -99,4 +134,44 @@ def cli_command_query(session_obj, pkt_data, code):
     return True
 
 def cli_command_field_list(session_obj, pkt_data, code):
-    pass #XXX
+    payload = [
+        ColumnDefinition(u'this',
+            column_types.VAR_STRING,
+            255 * 3, 0x21, # unicode (with char count 3)
+            decimals=31,
+            show_default=True,
+            seq_id=1
+            ),
+        ColumnDefinition(u'is',
+            column_types.SHORT,
+            2, 0x21,
+            decimals=0,
+            default=29,
+            show_default=True,
+            seq_id=2
+            ),
+        ## DATETIME
+        # MySQL's source sez:
+        # ** In string context: YYYY-MM-DD HH:MM:DD
+        # ** In number context: YYYYMMDDHHMMDD
+        # this is stored as an int8
+        ColumnDefinition(u'a',
+            column_types.DATETIME,
+            8, 0x21,
+            decimals=0,
+            default=20070127110000L,
+            show_default=True,
+            seq_id=3
+            ),
+        ColumnDefinition(u'test',
+            column_types.LONG,
+            4, 0x21,
+            decimals=2,
+            default=1337,
+            show_default=True,
+            seq_id=4
+            ),
+        EOFPacket(session_obj.client_capabilities, seq_id=5, status_flags=session_obj.server_status)
+    ]
+    session_obj.send_payload(columns)
+    return True
