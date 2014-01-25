@@ -242,3 +242,7 @@ class KeyValueList(MySQLDataType):
 
     def write_out(self, net_fd):
         raise NotImplemented
+
+
+class NullBitmap(FixedLengthString):
+    pass

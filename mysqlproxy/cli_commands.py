@@ -2,7 +2,7 @@
 Client to server command handling
 """
 from mysqlproxy.packet import ERRPacket, OKPacket
-from mysqlproxy.query_response import ResultSet, ResultSetRow, ColumnDefinition
+from mysqlproxy.query_response import ResultSetText, ResultSetRowText, ColumnDefinition
 from mysqlproxy import column_types
 import sys
 import socket
@@ -112,8 +112,8 @@ def cli_command_query(session_obj, pkt_data, code):
             decimals=31,
             org_name=u''
             )
-        row = ResultSetRow([version_comment])
-        result_set = ResultSet(
+        row = ResultSetRowText([version_comment])
+        result_set = ResultSetText(
                 session_obj.client_capabilities,
                 [cd], [row], seq_id=1, flags=session_obj.server_status)
     else:
@@ -123,8 +123,8 @@ def cli_command_query(session_obj, pkt_data, code):
             len(row_val) * 3, 0x21,
             decimals=31, org_name=u''
             )
-        row = ResultSetRow([row_val])
-        result_set = ResultSet(
+        row = ResultSetRowText([row_val])
+        result_set = ResultSetText(
             session_obj.client_capabilities,
             [cd], [row], seq_id=1, flags=session_obj.server_status)
     sio = StringIO()
