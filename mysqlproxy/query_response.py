@@ -16,6 +16,8 @@ class ColumnDefinition(Packet):
         org_table = kwargs.pop('org_table', table)
         decimals = kwargs.pop('decimals', 0)
         flags = kwargs.pop('flags', 0)
+        show_default = kwargs.pop('show_default', False)
+        default_value = kwargs.pop('default', None)
         self.fields = [
             ('catalog', LengthEncodedString(u'def')),
             ('schema', LengthEncodedString(schema)),
@@ -28,8 +30,12 @@ class ColumnDefinition(Packet):
             ('column_length', FixedLengthInteger(4, column_length)),
             ('column_type', FixedLengthInteger(1, column_type)),
             ('flags', FixedLengthInteger(2, flags)),
-            ('decimals', FixedLengthInteger(1, decimals))
+            ('decimals', FixedLengthInteger(1, decimals)),
+            ('filler', FixedLengthString(2, '\x00\x00'))
             ]
+        if show_default:
+            # XXX add default_value field
+            pass
 
 
 class ResultSetRow(Packet):
@@ -40,13 +46,11 @@ class ResultSetRow(Packet):
         super(ResultSetRow, self).__init__(0, **kwargs)
         self.fields = []
         for val, pos in [(values[x], x) for x in range(0, len(values))]:
-            if val:
+            if val != None:
                 val_field = LengthEncodedString(str(val))
             else: # 0xfb is considered null for a column value
                 val_field = FixedLengthString(1, '\xfb')
-            self.fields.append(
-                ('val_%d' % pos, val_field)
-                )
+            self.fields.append(('val_%d' % pos, val_field))
 
 
 class ResultSet(object):
@@ -56,7 +60,7 @@ class ResultSet(object):
     column_count --> ColumnDefinition packets --> 
         EOF --> ResultSetRow packets --> EOF/ERR
     """
-    def __init__(self, client_capabilities, columns, col_values, seq_id=1, more_results=False):
+    def __init__(self, client_capabilities, columns, col_values, seq_id=1, more_results=False, flags=0):
         """
         columns -- list of ColumnDefinition objects
         col_values -- 2d list of respective values
@@ -68,13 +72,15 @@ class ResultSet(object):
         self.col_values = col_values
         self.more_results = more_results
         self.seq_id = seq_id
+        self.flags = flags
 
     def write_out(self, net_fd):
+        server_status_flags = self.flags | \
+            (0 if not self.more_results else status_flags.MORE_RESULTS_EXISTS)
         num_cols = len(self.columns)
         if num_cols == 0 or len(self.col_values) == 0:
             return OKPacket(self.client_capabilities, 0, 0, seq_id=self.seq_id).write_out(net_fd)
-        opc = OutgoingPacketChain()
-        opc.seq_id = self.seq_id
+        opc = OutgoingPacketChain(start_seq_id=self.seq_id)
         opc.add_field(LengthEncodedInteger(num_cols))
         total_written, seq_id = opc.write_out(net_fd)
         for column in self.columns:
@@ -83,13 +89,13 @@ class ResultSet(object):
             total_written += col_bytes_written
         eof_written, seq_id = EOFPacket(
             self.client_capabilities,
-            seq_id=seq_id+1).write_out(net_fd)
+            seq_id=seq_id+1,
+            status_flags=server_status_flags).write_out(net_fd)
         total_written += eof_written
         for row in self.col_values:
             row.seq_id = seq_id+1
             row_bytes_written, seq_id = row.write_out(net_fd)
             total_written += row_bytes_written
-        server_status_flags = 0 if not self.more_results else status_flags.MORE_RESULTS_EXISTS
         eof_written, seq_id = EOFPacket(
             self.client_capabilities,
             seq_id=seq_id+1,

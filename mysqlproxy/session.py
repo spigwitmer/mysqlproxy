@@ -5,7 +5,7 @@ session state.
 from mysqlproxy.packet import OKPacket, ERRPacket, Packet, \
         IncomingPacketChain
 from mysqlproxy.types import *
-from mysqlproxy import capabilities, cli_commands
+from mysqlproxy import capabilities, cli_commands, status_flags
 from random import randint
 from mysqlproxy import error_codes as errs
 from hashlib import sha1
@@ -15,6 +15,8 @@ SERVER_CAPABILITIES = capabilities.PROTOCOL_41 \
         | capabilities.SECURE_CONNECTION \
         | capabilities.CONNECT_WITH_DB \
         | capabilities.CONNECT_ATTRS
+
+PERMANENT_STATUS_FLAGS = status_flags.STATUS_AUTOCOMMIT
 
 def generate_nonce(nsize=20):
     return ''.join([chr(randint(1, 255)) for _ in range(0, nsize)])
@@ -34,7 +36,7 @@ class HandshakeV10(Packet):
             ('auth_data_1', FixedLengthString(8, bytes(nonce[:8]))),
             ('filler', FixedLengthInteger(1, 0)),
             ('cap_flags_lower', FixedLengthInteger(2, server_capabilities & 0xffff)),
-            ('charset', FixedLengthInteger(1, 0x33)),
+            ('charset', FixedLengthInteger(1, 0x21)),
             ('status_flags', FixedLengthInteger(2, 0)),
             ('cap_flags_upper', FixedLengthInteger(2, (server_capabilities >> 16))),
             ('reserved', FixedLengthInteger(1, 0)),
@@ -115,6 +117,7 @@ class Session(object):
         self.default_db = None
         self.client_capabilities = 0
         self.server_capabilities = SERVER_CAPABILITIES
+        self.server_status = PERMANENT_STATUS_FLAGS
         if self.do_handshake(): # TODO refactor
             self.serve_forever()
 

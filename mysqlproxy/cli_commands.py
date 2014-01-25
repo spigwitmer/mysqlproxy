@@ -6,6 +6,7 @@ from mysqlproxy.query_response import ResultSet, ResultSetRow, ColumnDefinition
 from mysqlproxy import column_types
 import sys
 import socket
+from StringIO import StringIO
 
 COMMAND_CODES = {
     0x01: ('quit', 'cli_command_quit'),
@@ -42,7 +43,7 @@ def handle_client_command(session, cmd_packet_data):
     print 'Received command code %x (%s)' % \
             (cli_command, command_fn_name)
     command_fn = globals().get(command_fn_name, unknown_cli_command)
-    return command_fn(session, cmd_packet_data, cli_command)
+    return command_fn(session, cmd_packet_data[1:], cli_command)
 
 
 def cli_change_db(session, pkt_data, code):
@@ -62,22 +63,40 @@ def cli_command_quit(session, pkt_data, code):
     return False
 
 
-def cli_command_query(session, pkt_data, code):
+def cli_command_query(session_obj, pkt_data, code):
     query = pkt_data
     print 'Got query command: %s' % query
 
     # XXX
-    version_comment = 'hurfdurf'
-    cd = ColumnDefinition('@@version_comment', column_types.VAR_STRING, len(version_comment), 33)
-    row = ResultSetRow(['hurfdurf'])
-    rs = ResultSet(session.client_capabilities, [cd], [row], seq_id=1)
+    if query.lower() == 'select @@version_comment limit 1':
+        version_comment = u'mysqlproxy 0.1 -- 2014 Pat Mac'
+        cd = ColumnDefinition(u'@@version_comment',
+            column_types.VAR_STRING,
+            len(version_comment) * 3,
+            0x21,
+            decimals=31,
+            org_name=u''
+            )
+        row = ResultSetRow([version_comment])
+        result_set = ResultSet(
+                session_obj.client_capabilities,
+                [cd], [row], seq_id=1, flags=session_obj.server_status)
+    else:
+        row_val = u'...not implemented yet'
+        cd = ColumnDefinition(u'This is...',
+            column_types.VAR_STRING,
+            len(row_val) * 3, 0x21,
+            decimals=31, org_name=u''
+            )
+        row = ResultSetRow([row_val])
+        result_set = ResultSet(
+            session_obj.client_capabilities,
+            [cd], [row], seq_id=1, flags=session_obj.server_status)
     sio = StringIO()
-    rs.write_out(sio)
+    result_set.write_out(sio)
     sio.seek(0)
-    self.net_fd.write(sio.read())
-
-    #session.send_payload(rs)
-    #session.send_payload(OKPacket(
-    #    session.client_capabilities, \
-    #    affected_rows=0, last_insert_id=0, seq_id=1, info=''))
+    session_obj.net_fd.write(sio.read())
     return True
+
+def cli_command_field_list(session_obj, pkt_data, code):
+    pass #XXX
