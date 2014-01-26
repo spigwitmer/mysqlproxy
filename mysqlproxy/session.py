@@ -170,6 +170,15 @@ class Session(object):
         username = response.get_field('username').val
         auth_response = response.get_field('auth_response').val
 
+        if not cap_flags & capabilities.PROTOCOL_41:
+            # Forget about it, we will not support the
+            # 3.2 protocol
+            return False, False, \
+                ERRPacket(cap_flags, error_code=1062,
+                    error_msg='your client needs MySQL 4.1 protocol support to use mysqlproxy.',
+                    seq_id=2
+                    )
+
         #XXX what about LDAP again?
         valid_users = {
             'root': 'l33t',
@@ -182,7 +191,7 @@ class Session(object):
         hashed_nonce = sha1(nonce + sha1(passwd_sha).digest()).digest()
         expected_auth_response = \
                 ''.join([chr(ord(passwd_sha[x]) ^ ord(hashed_nonce[x])) for x in range(0, 20)])
-        return expected_auth_response == auth_response, cap_flags
+        return True, expected_auth_response == auth_response, cap_flags
 
     def do_handshake(self):
         """
@@ -195,17 +204,20 @@ class Session(object):
         response = HandshakeResponse()
         response.read_in(self.net_fd)
         print 'response seq id: %d' % response.seq_id # it better be 1
-        authenticated, client_caps = self._init_and_authenticate(nonce, response)
-        if authenticated:
-            resp_pkt = OKPacket(client_caps,
-                affected_rows=0,
-                last_insert_id=0,
-                seq_id=2)
+        success, authenticated, client_caps = self._init_and_authenticate(nonce, response)
+        if success:
+            if authenticated:
+                resp_pkt = OKPacket(client_caps,
+                    affected_rows=0,
+                    last_insert_id=0,
+                    seq_id=2)
+            else:
+                resp_pkt = ERRPacket(client_caps,
+                    error_code=errs.ACCESS_DENIED,
+                    error_msg='LOL NO GOODBYE',
+                    seq_id=2)
         else:
-            resp_pkt = ERRPacket(client_caps,
-                error_code=errs.ACCESS_DENIED,
-                error_msg='LOL NO GOODBYE',
-                seq_id=2)
+            resp_pkt = client_caps
         resp_pkt.write_out(self.net_fd)
         self.net_fd.flush()
         return authenticated
