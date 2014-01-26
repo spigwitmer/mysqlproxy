@@ -8,6 +8,7 @@ from mysqlproxy import column_types
 import sys
 import socket
 from StringIO import StringIO
+from datetime import datetime
 
 COMMAND_CODES = {
     0x01: ('quit', 'cli_command_quit'),
@@ -110,11 +111,13 @@ def cli_command_query(session_obj, pkt_data, code):
     if query.lower() == 'select @@version_comment limit 1':
         col_name = u'@@version_comment'
         row_val = u'mysqlproxy 0.1 -- 2014 Pat Mac'
+        result_set.add_column(col_name, column_types.VAR_STRING, len(row_val))
+        result_set.add_row([row_val])
     else:
-        col_name = u'this_is'
-        row_val = u'...not implemented yet'
-    result_set.add_column(col_name, column_types.VAR_STRING, len(row_val))
-    result_set.add_row([row_val])
+        result_set.add_column(u'this_is', column_types.VAR_STRING, 7)
+        result_set.add_column(u'not_implemented', column_types.VAR_STRING, 15)
+        result_set.add_column(u'yet', column_types.DATETIME, 4)
+        result_set.add_row([u'hello!', None, datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
     sio = StringIO()
     result_set.write_out(sio)
     sio.seek(0)

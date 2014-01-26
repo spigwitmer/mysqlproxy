@@ -42,49 +42,17 @@ class ColumnDefinition(Packet):
                 ]
 
 
-class ResultSetRowText(Packet):
-    """
-    Actual values for the returned rows
-    """
-    def __init__(self, values, **kwargs):
-        super(ResultSetRowText, self).__init__(0, **kwargs)
-        self.fields = []
-        for val, pos in [(values[x], x) for x in range(0, len(values))]:
-            if val != None:
-                val_field = LengthEncodedString(str(val))
-            else: # 0xfb is considered null for a column value
-                val_field = FixedLengthString(1, '\xfb')
-            self.fields.append(('val_%d' % pos, val_field))
-
-
-def ResultSetRowBinary(Packet):
-    def __init__(self, column_info, values, **kwargs):
-        super(ResultSetRowBinary, self).__init__(0, **kwargs)
-
-        # the binary protocol keeps a bitmap of positions of all the
-        # field values that are null
-        bitmap_len = (len(self.values) + 7 + 2) / 8
-        null_bitmap = '\x00' * bitmap_len
-        value_fields = []
-        for val, pos in [(values[x], x) for x in range(0, len(values))]:
-            col_info = column_info[x]
-            if val == None:
-                null_bitmap[(pos + 2) / 8] |= 1 << ((pos + 2) % 8)
-            else:
-                value_fields += generate_binary_field_info(val, col_info.column_type)
-        self.fields = [FixedLengthString(bitmap_len, null_bitmap)] + value_fields
-
 class ResultSet(object):
     def __init__(self, client_capabilities, seq_id=1, more_results=False, flags=0):
         """
         columns -- list of ColumnDefinition objects
-        col_values -- 2d list of respective values
+        rows -- 2d list of respective values
         more_results -- True if there are actually more results than given
             (this is just a server-status reported to the client)
         """
         self.client_capabilities = client_capabilities
         self.columns = []
-        self.col_values = []
+        self.rows = []
         self.more_results = more_results
         self.seq_id = seq_id
         self.flags = flags
@@ -95,6 +63,11 @@ class ResultSet(object):
         return (colinfo_written+rowinfo_written, last_seq_id)
 
     def add_column(self, name, coltype, field_length, **kwargs):
+        if len(self.rows) > 0:
+            # By adding more columns later, any added rows 
+            # would now be misaligned
+            raise ValueError('Attempt to add column after row population')
+
         charset_code = kwargs.pop('charset_code', 33) # always default to UTF8
         char_count = 3 if charset_code == 33 else 1
         column = ColumnDefinition(name, 
@@ -130,7 +103,7 @@ class ResultSetText(ResultSet):
         if len(row_values) != len(self.columns):
             raise ValueError(u'row value count (%d) != column count (%d)' % \
                 (len(row_values), len(self.columns)))
-        self.col_values.append(
+        self.rows.append(
             ResultSetRowText(row_values)
             )
 
@@ -139,7 +112,7 @@ class ResultSetText(ResultSet):
         Send column metadata over the wire, followed by an EOF
         """
         num_cols = len(self.columns)
-        if num_cols == 0 or len(self.col_values) == 0:
+        if num_cols == 0 or len(self.rows) == 0:
             return OKPacket(self.client_capabilities, 0, 0, seq_id=self.seq_id).write_out(net_fd)
         opc = OutgoingPacketChain(start_seq_id=seq_id)
         opc.add_field(LengthEncodedInteger(num_cols))
@@ -159,7 +132,7 @@ class ResultSetText(ResultSet):
         server_status_flags = self.flags | \
             (0 if not self.more_results else status_flags.MORE_RESULTS_EXISTS)
         total_written = 0
-        for row in self.col_values:
+        for row in self.rows:
             row.seq_id = seq_id+1
             row_bytes_written, seq_id = row.write_out(net_fd)
             total_written += row_bytes_written
@@ -170,7 +143,52 @@ class ResultSetText(ResultSet):
         return total_written, seq_id
 
 
+class ResultSetRowText(Packet):
+    """
+    Actual values for the returned rows
+    """
+    def __init__(self, values, **kwargs):
+        super(ResultSetRowText, self).__init__(0, **kwargs)
+        self.fields = []
+        for val, pos in [(values[x], x) for x in range(0, len(values))]:
+            if val != None:
+                val_field = LengthEncodedString(str(val))
+            else: # 0xfb is considered null for a column value
+                val_field = FixedLengthString(1, '\xfb')
+            self.fields.append(('val_%d' % pos, val_field))
+
+
 class ResultSetBinary(ResultSetText):
+    def add_row(self, row_values):
+        """
+        The binary result set has its own way of transliterating
+        variable types to match the columns
+        """
+        if len(row_values) != len(self.columns):
+            raise ValueError(u'row value count (%d) != column count (%d)' % \
+                (len(row_values), len(self.columns)))
+        self.rows.append(ResultSetRowBinary(self.columns, row_values))
+
     def send_row_info(self, net_fd, seq_id):
-        if not server_status_flags & status_flags.STATUS_CURSOR_EXISTS:
+        if not self.flags & status_flags.STATUS_CURSOR_EXISTS:
             return super(ResultSetBinary, self).send_row_info(net_fd, seq_id)
+
+
+class ResultSetRowBinary(Packet):
+    def __init__(self, column_info, values, **kwargs):
+        super(ResultSetRowBinary, self).__init__(0, **kwargs)
+        # the binary protocol keeps a bitmap of positions of all the
+        # field values that are null
+        bitmap_len = (len(values) + 7 + 2) / 8
+        null_bitmap = '\x00' * bitmap_len
+        value_fields = []
+        for val, pos in [(values[x], x) for x in range(0, len(values))]:
+            col_info = column_info[x]
+            if val == None:
+                null_bitmap[(pos + 2) / 8] |= 1 << ((pos + 2) % 8)
+            else:
+                value_fields += generate_binary_field_info(val, col_info.column_type)
+        self.fields = [
+            ('packet_header', FixedLengthString(1, '\x00')),
+            ('null_bitmap', FixedLengthString(bitmap_len, null_bitmap))
+            ] + value_fields

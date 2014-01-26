@@ -17,19 +17,19 @@ def generate_binary_field_info(val, type_code):
         coltypes.MEDIUM_BLOB, coltypes.BLOB, coltypes.TINY_BLOB,
         coltypes.GEOMETRY, coltypes.BIT, coltypes.DECIMAL,
         coltypes.NEWDECIMAL]:
-        return [LengthEncodedString(unicode(val))]
+        return [('str_val', LengthEncodedString(unicode(val)))]
     elif type_code == coltypes.LONGLONG:
-        return [FixedLengthInteger(8, val)]
+        return [('uint64_val', FixedLengthInteger(8, val))]
     elif type_code in [coltypes.LONG, coltypes.INT24]:
-        return [FixedLengthInteger(4, val)]
+        return [('uint32_val', FixedLengthInteger(4, val))]
     elif type_code in [coltypes.SHORT, coltypes.YEAR]:
-        return [FixedLengthInteger(2, val)]
+        return [('uint16_val', FixedLengthInteger(2, val))]
     elif type_code == coltypes.TINY:
-        return [FixedLengthInteger(1, val)]
+        return [('uint8_val', FixedLengthInteger(1, val))]
     elif type_code == coltypes.DOUBLE:
-        return [FixedLengthString(8, struct.pack('<d', float(val)))]
+        return [('double_val', FixedLengthString(8, struct.pack('<d', float(val))))]
     elif type_code == coltypes.FLOAT:
-        return [FixedLengthString(4, struct.pack('<f', float(val)))]
+        return [('float_val', FixedLengthString(4, struct.pack('<f', float(val))))]
     elif type_code in [coltypes.DATE, coltypes.DATETIME, coltypes.TIMESTAMP]:
         if type(val) in [tuple, list]:
             # we sorta know what we're doing
@@ -48,14 +48,14 @@ def generate_binary_field_info(val, type_code):
 
         # TODO: 0-val optimizations, length doesn't have to be 11
         return [
-            FixedLengthInteger(1, 11),
-            FixedLengthInteger(2, year),
-            FixedLengthInteger(1, month),
-            FixedLengthInteger(1, day),
-            FixedLengthInteger(1, hour),
-            FixedLengthInteger(1, minute),
-            FixedLengthInteger(1, second),
-            FixedLengthInteger(4, micro_second)
+            ('packet_length', FixedLengthInteger(1, 11)),
+            ('year', FixedLengthInteger(2, year)),
+            ('month', FixedLengthInteger(1, month)),
+            ('day', FixedLengthInteger(1, day)),
+            ('hour', FixedLengthInteger(1, hour)),
+            ('minute', FixedLengthInteger(1, minute)),
+            ('second', FixedLengthInteger(1, second)),
+            ('micro_second', FixedLengthInteger(4, micro_second))
         ]
     elif type_code == coltypes.TIME:
         # time delta
@@ -81,13 +81,13 @@ def generate_binary_field_info(val, type_code):
 
         # TODO: again, 0-val optimizations
         return [
-            FixedLengthInteger(1, 12), # field length
-            FixedLengthInteger(1, is_negative),
-            FixedLengthInteger(4, days),
-            FixedLengthInteger(1, hours),
-            FixedLengthInteger(1, minutes),
-            FixedLengthInteger(1, seconds),
-            FixedLengthInteger(4, micro_seconds),
+            ('field_length', FixedLengthInteger(1, 12)),
+            ('is_negative', FixedLengthInteger(1, is_negative)),
+            ('days', FixedLengthInteger(4, days)),
+            ('hours', FixedLengthInteger(1, hours)),
+            ('minutes', FixedLengthInteger(1, minutes)),
+            ('seconds', FixedLengthInteger(1, seconds)),
+            ('micro_seconds', FixedLengthInteger(4, micro_seconds)),
         ]
     else:
         raise ValueError('Invalid column type (code: %d)' % type_code)
