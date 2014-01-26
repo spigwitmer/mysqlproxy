@@ -2,7 +2,8 @@
 Client to server command handling
 """
 from mysqlproxy.packet import ERRPacket, OKPacket
-from mysqlproxy.query_response import ResultSetText, ResultSetRowText, ColumnDefinition
+from mysqlproxy.query_response import ResultSetText, ResultSetRowText, \
+    ResultSetBinary, ResultSetRowBinary, ColumnDefinition
 from mysqlproxy import column_types
 import sys
 import socket
@@ -102,31 +103,18 @@ def cli_command_query(session_obj, pkt_data, code):
     query = pkt_data
     print 'Got query command: %s' % query
 
+    result_set = ResultSetText(session_obj.client_capabilities,
+        flags=session_obj.server_status)
+
     # XXX
     if query.lower() == 'select @@version_comment limit 1':
-        version_comment = u'mysqlproxy 0.1 -- 2014 Pat Mac'
-        cd = ColumnDefinition(u'@@version_comment',
-            column_types.VAR_STRING,
-            len(version_comment) * 3,
-            0x21,
-            decimals=31,
-            org_name=u''
-            )
-        row = ResultSetRowText([version_comment])
-        result_set = ResultSetText(
-                session_obj.client_capabilities,
-                [cd], [row], seq_id=1, flags=session_obj.server_status)
+        col_name = u'@@version_comment'
+        row_val = u'mysqlproxy 0.1 -- 2014 Pat Mac'
     else:
+        col_name = u'this_is'
         row_val = u'...not implemented yet'
-        cd = ColumnDefinition(u'This is...',
-            column_types.VAR_STRING,
-            len(row_val) * 3, 0x21,
-            decimals=31, org_name=u''
-            )
-        row = ResultSetRowText([row_val])
-        result_set = ResultSetText(
-            session_obj.client_capabilities,
-            [cd], [row], seq_id=1, flags=session_obj.server_status)
+    result_set.add_column(col_name, column_types.VAR_STRING, len(row_val))
+    result_set.add_row([row_val])
     sio = StringIO()
     result_set.write_out(sio)
     sio.seek(0)

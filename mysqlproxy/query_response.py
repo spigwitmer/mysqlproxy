@@ -75,7 +75,7 @@ def ResultSetRowBinary(Packet):
         self.fields = [FixedLengthString(bitmap_len, null_bitmap)] + value_fields
 
 class ResultSet(object):
-    def __init__(self, client_capabilities, columns, col_values, seq_id=1, more_results=False, flags=0):
+    def __init__(self, client_capabilities, seq_id=1, more_results=False, flags=0):
         """
         columns -- list of ColumnDefinition objects
         col_values -- 2d list of respective values
@@ -83,8 +83,8 @@ class ResultSet(object):
             (this is just a server-status reported to the client)
         """
         self.client_capabilities = client_capabilities
-        self.columns = columns
-        self.col_values = col_values
+        self.columns = []
+        self.col_values = []
         self.more_results = more_results
         self.seq_id = seq_id
         self.flags = flags
@@ -94,11 +94,50 @@ class ResultSet(object):
         rowinfo_written, last_seq_id = self.send_row_info(net_fd, next_seq_id)
         return (colinfo_written+rowinfo_written, last_seq_id)
 
+    def add_column(self, name, coltype, field_length, **kwargs):
+        charset_code = kwargs.pop('charset_code', 33) # always default to UTF8
+        char_count = 3 if charset_code == 33 else 1
+        column = ColumnDefinition(name, 
+            coltype, field_length * char_count,
+            charset_code, **kwargs)
+        self.columns.append(column)
+
+    def add_row(self, row_values, **kwargs):
+        """
+        Append list of values as row to results
+        """
+        raise NotImplementedError
+
+    def send_column_info(self, net_fd, seq_id):
+        """
+        Send column metadata over the wire
+        """
+        raise NotImplementedError
+
+    def send_row_info(self, net_fd, seq_id):
+        """
+        Send row data over the wire
+        """
+        raise NotImplementedError
+        
 
 class ResultSetText(ResultSet):
+    def add_row(self, row_values):
+        """
+        In the text protocol, the values are just written out
+        on the wire as fixed length strings, regardless of its type
+        """
+        if len(row_values) != len(self.columns):
+            raise ValueError(u'row value count (%d) != column count (%d)' % \
+                (len(row_values), len(self.columns)))
+        self.col_values.append(
+            ResultSetRowText(row_values)
+            )
+
     def send_column_info(self, net_fd, seq_id):
-        server_status_flags = self.flags | \
-            (0 if not self.more_results else status_flags.MORE_RESULTS_EXISTS)
+        """
+        Send column metadata over the wire, followed by an EOF
+        """
         num_cols = len(self.columns)
         if num_cols == 0 or len(self.col_values) == 0:
             return OKPacket(self.client_capabilities, 0, 0, seq_id=self.seq_id).write_out(net_fd)
@@ -112,11 +151,14 @@ class ResultSetText(ResultSet):
         eof_written, seq_id = EOFPacket(
             self.client_capabilities,
             seq_id=seq_id+1,
-            status_flags=server_status_flags).write_out(net_fd)
+            status_flags=self.flags).write_out(net_fd)
         total_written += eof_written
         return total_written, seq_id
 
     def send_row_info(self, net_fd, seq_id):
+        server_status_flags = self.flags | \
+            (0 if not self.more_results else status_flags.MORE_RESULTS_EXISTS)
+        total_written = 0
         for row in self.col_values:
             row.seq_id = seq_id+1
             row_bytes_written, seq_id = row.write_out(net_fd)

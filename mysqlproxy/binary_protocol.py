@@ -77,7 +77,7 @@ def generate_binary_field_info(val, type_code):
             is_negative, days, hours, minutes, seconds, micro_seconds = val
             is_negative = int(is_negative) # if a bool, convert it
         else:
-            raise ValueError('val for TIME type is incomplete length (%d) % len(val))
+            raise ValueError('val for TIME type is incomplete length (%d)' % len(val))
 
         # TODO: again, 0-val optimizations
         return [
