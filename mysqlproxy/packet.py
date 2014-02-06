@@ -39,10 +39,10 @@ class IncomingPacketChain(object):
         seq_id = FixedLengthInteger(1)
         self.payload = StringIO()
         while packet_length.val == 0xffffff:
-            packet_length.read_in(fde)
-            seq_id.read_in(fde)
+            packet_length.read_in(fde, label=None)
+            seq_id.read_in(fde, label=None)
             cur_payload = FixedLengthString(packet_length.val)
-            cur_payload.read_in(fde)
+            cur_payload.read_in(fde, label=None)
             self.payload.write(cur_payload.val)
             self.packet_meta.append(PacketMeta(packet_length.val, seq_id.val))
             total_read += packet_length.val
@@ -71,11 +71,11 @@ class OutgoingPacketChain(object):
         self.fields = []
         self.start_seq_id = start_seq_id
 
-    def add_field(self, field):
+    def add_field(self, field, label='<unlabeled>'):
         """
         Add field to payload
         """
-        self.fields.append(field)
+        self.fields.append((label, field))
 
     def _write_packet_header(self, length, seq, fde):
         """
@@ -84,8 +84,8 @@ class OutgoingPacketChain(object):
         """
         length_field = FixedLengthInteger(3, length)
         seq_field = FixedLengthInteger(1, seq)
-        length_field.write_out(fde)
-        seq_field.write_out(fde)
+        length_field.write_out(fde, label=None)
+        seq_field.write_out(fde, label=None)
 
     def write_out(self, fde):
         """
@@ -98,8 +98,8 @@ class OutgoingPacketChain(object):
         net_total_written = 0
         total_written = 0
         last_total_written = 0xffffff
-        for field in self.fields:
-            written = field.write_out(sio)
+        for label, field in self.fields:
+            written = field.write_out(sio, label='\t%s'  % label)
             total_written += written
             net_total_written += written
             if total_written >= 0xffffff:
@@ -144,8 +144,8 @@ class Packet(object):
         do custom payload reading
         """
         read_length = 0
-        for _, field in self.fields:
-            read_length += field.read_in(pl_fd)
+        for label, field in self.fields:
+            read_length += field.read_in(pl_fd, label='\t%s' % label)
         return read_length
 
 
@@ -154,8 +154,8 @@ class Packet(object):
         Generic write-out of all fields
         """
         opc = OutgoingPacketChain(start_seq_id=self.seq_id)
-        for _, field in self.fields:
-            opc.add_field(field)
+        for label, field in self.fields:
+            opc.add_field(field, label=label)
         return opc.write_out(fde)
 
     def get_field(self, field_of_interest):

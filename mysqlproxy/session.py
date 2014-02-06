@@ -6,14 +6,26 @@ from mysqlproxy.packet import OKPacket, ERRPacket, Packet, \
         IncomingPacketChain
 from mysqlproxy.types import *
 from mysqlproxy import capabilities, cli_commands, status_flags
+from mysqlproxy.query_response import ResultSetText
 from random import randint
-from mysqlproxy import error_codes as errs
+from mysqlproxy import column_types, error_codes as errs
 from hashlib import sha1
+import MySQLdb
+from _mysql_exceptions import ProgrammingError, OperationalError
 
-SERVER_CAPABILITIES = capabilities.PROTOCOL_41 \
-        | capabilities.INTERACTIVE \
-        | capabilities.SECURE_CONNECTION \
+SERVER_CAPABILITIES = capabilities.LONG_PASSWORD \
+        | capabilities.FOUND_ROWS \
+        | capabilities.LONG_FLAG \
         | capabilities.CONNECT_WITH_DB \
+        | capabilities.NO_SCHEMA \
+        | capabilities.IGNORE_SPACE \
+        | capabilities.PROTOCOL_41 \
+        | capabilities.INTERACTIVE \
+        | capabilities.TRANSACTIONS \
+        | capabilities.SECURE_CONNECTION \
+        | capabilities.MULTI_STATEMENTS \
+        | capabilities.MULTI_RESULTS \
+        | capabilities.PS_MULTI_RESULTS \
         | capabilities.CONNECT_ATTRS
 
 PERMANENT_STATUS_FLAGS = status_flags.STATUS_AUTOCOMMIT
@@ -95,13 +107,88 @@ class HandshakeFailed(Exception):
     pass
 
 
-class Proxy(object):
+class AuthenticationFailed(Exception):
+    pass
+
+
+class SQLProxy(object):
     """
     MySQL proxy instance
     This is what actually does brokering between
     client and target db server.
     """
-    pass
+    def __init__(self, client_fd, host=u'127.0.0.1', port=3306, user=u'root', passwd=u'', **kwargs):
+        self.client_fd = client_fd
+        self.host = host
+        self.port = port
+        self.user = user
+        self.passwd = passwd
+
+        self.client_conn = MySQLdb.connect(self.host, port=port, user=user, passwd=passwd)
+        self.forward_auth = kwargs.get('forward_auth', False)
+        if self.forward_auth:
+            # TODO: if we're forwarding client credentials to our target server,
+            # find out if we can actually access the mysql.user table.
+            # Read that in, filter anything using <4.1 auth, and go from
+            # there.
+            raise NotImplementedError('forward_auth')
+        else:
+            # static user:passwd combo to access the proxy
+            self.client_user = kwargs['client_user']
+            self.client_passwd = kwargs['client_passwd']
+        self.session = Session(client_fd, self)
+
+    def change_db(self, dbname):
+        """
+        Changes default database
+        Returns OK or ERR
+        """
+        try:
+            self.client_conn.select_db(dbname)
+            return OKPacket(self.session.client_capabilities,
+                0, 0, seq_id=1)
+        except OperationalError as ex:
+            err_code, err_msg = ex
+            return ERRPacket(self.session.client_capabilities,
+                error_code=err_code, error_msg=err_msg, seq_id=1)
+
+    def start(self):
+        try:
+            if self.session.do_handshake():
+                self.session.serve_forever()
+        finally:
+            self.client_conn.close()
+
+    def build_response_from_query(self, query):
+        """
+        Do the actual query on the target MySQL host.
+        Returns a packet type of either OK, ERR, or a ResultSetText
+        """
+        try:
+            cursor = self.client_conn.cursor()
+            num_rows = cursor.execute(query)
+            if num_rows == 0:
+                return OKPacket(self.session.client_capabilities,
+                    affected_rows=conn.affected_rows(),
+                    last_insert_id=conn.insert_id(),
+                    seq_id=1
+                    )
+            col_types = cursor.description
+            results = cursor.fetchall()
+            cursor.close()
+            response = ResultSetText(self.session.client_capabilities,
+                flags=self.session.server_status)
+            for colname, coltype, col_max_len, \
+                    field_len, field_max_len, _, _ in col_types:
+                response.add_column(unicode(colname), coltype, field_len)
+            for row in results:
+                lvals = list(row)
+                response.add_row(lvals)
+            return response
+        except (ProgrammingError, OperationalError) as ex:
+            err_code, err_msg = ex
+            return ERRPacket(self.session.client_capabilities,
+                error_code=err_code, error_msg=err_msg, seq_id=1)
 
 
 class Session(object):
@@ -111,15 +198,14 @@ class Session(object):
     always act as a FIFO (a.k.a. if you're going through UDP,
     do your own packet mangling).
     """
-    def __init__(self, fde):
+    def __init__(self, fde, proxy_obj):
         self.net_fd = fde
         self.connected = True
         self.default_db = None
         self.client_capabilities = 0
         self.server_capabilities = SERVER_CAPABILITIES
         self.server_status = PERMANENT_STATUS_FLAGS
-        if self.do_handshake(): # TODO refactor
-            self.serve_forever()
+        self.proxy_obj = proxy_obj
 
     def send_payload(self, what):
         """
@@ -179,10 +265,9 @@ class Session(object):
                     seq_id=2
                     )
 
-        #XXX what about LDAP again?
+        #XXX what about forward_auth?
         valid_users = {
-            'root': 'l33t',
-            'pat': 'lolwut'
+            self.proxy_obj.client_user: self.proxy_obj.client_passwd
             }
         if username not in valid_users:
             return False, cap_flags

@@ -9,6 +9,7 @@ import sys
 import socket
 from StringIO import StringIO
 from datetime import datetime
+import _mysql_exceptions
 
 COMMAND_CODES = {
     0x01: ('quit', 'cli_command_quit'),
@@ -28,6 +29,11 @@ COMMAND_CODES = {
     0x0f: ('time', 'unsupported_client_command'), # internal
     0x10: ('delayed_insert', 'unsupported_client_command'), # internal
     0x11: ('change_user', 'unsupported_client_command'),
+    0x16: ('stmt_prepare', 'unsupported_client_command'),
+    0x17: ('stmt_execute', 'unsupported_client_command'),
+    0x18: ('stmt_send_long_data', 'unsupported_client_command'),
+    0x19: ('stmt_close', 'unsupported_client_command'),
+    0x19: ('stmt_reset', 'unsupported_client_command'),
     0x1f: ('reset_connection', 'unsupported_client_command'),
     0x1d: ('daemon', 'unsupported_client_command'), # internal
 }
@@ -42,12 +48,12 @@ def cli_command_ping(session_obj, pkt, code):
     return True
 
 def unsupported_client_command(session_obj, pkt, code):
-    command_name = COMMAND_CODES[code]
+    command_name = COMMAND_CODES[code][0]
     session_obj.send_payload(
         ERRPacket(
             session_obj.client_capabilities,
             error_code=9990,
-            error_msg=u'The "%s" is unsupported by mysqlproxy' % command_name,
+            error_msg=u'The command "%s" is unsupported by mysqlproxy' % command_name,
             seq_id=1
         ))
     return True
@@ -83,10 +89,10 @@ def handle_client_command(session, cmd_packet_data):
     return command_fn(session, cmd_packet_data[1:], cli_command)
 
 
-def cli_change_db(session, pkt_data, code):
+def cli_change_db(session_obj, pkt_data, code):
     schema_name = pkt_data
-    session.send_payload(ERRPacket(session.client_capabilities, \
-        error_code=9999, error_msg='No available databases specified by hooks', seq_id=1))
+    response = session_obj.proxy_obj.change_db(schema_name)
+    session.send_payload(response)
     return True
 
 
@@ -103,25 +109,23 @@ def cli_command_quit(session, pkt_data, code):
 def cli_command_query(session_obj, pkt_data, code):
     query = pkt_data
     print 'Got query command: %s' % query
-
-    result_set = ResultSetText(session_obj.client_capabilities,
-        flags=session_obj.server_status)
-
-    # XXX
     if query.lower() == 'select @@version_comment limit 1':
+        # intercept the MySQL client getting version info, replace with our own
+        response = ResultSetText(session_obj.client_capabilities,
+            flags=session_obj.server_status)
         col_name = u'@@version_comment'
         row_val = u'mysqlproxy 0.1 -- 2014 Pat Mac'
-        result_set.add_column(col_name, column_types.VAR_STRING, len(row_val))
-        result_set.add_row([row_val])
+        response.add_column(col_name, column_types.VAR_STRING, len(row_val))
+        response.add_row([row_val])
+    elif query.lower() == 'select 1':
+        print 'INTERCEPTING "select 1"'
+        response = ResultSetText(session_obj.client_capabilities,
+            flags=session_obj.server_status)
+        response.add_column(u'1', column_types.LONGLONG, 1)
+        response.add_row([1L])
     else:
-        result_set.add_column(u'this_is', column_types.VAR_STRING, 7)
-        result_set.add_column(u'not_implemented', column_types.VAR_STRING, 15)
-        result_set.add_column(u'yet', column_types.DATETIME, 4)
-        result_set.add_row([u'hello!', None, datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
-    sio = StringIO()
-    result_set.write_out(sio)
-    sio.seek(0)
-    session_obj.net_fd.write(sio.read())
+        response = session_obj.proxy_obj.build_response_from_query(query)
+    session_obj.send_payload(response)
     return True
 
 def cli_command_field_list(session_obj, pkt_data, code):

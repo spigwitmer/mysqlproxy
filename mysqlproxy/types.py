@@ -34,6 +34,27 @@ class MySQLDataType(object):
     def __init__(self):
         self.val = b''
         self.length = 0
+        self._old_read_in = self.read_in
+        def debug_read_in(fstream, label="<unlabeled>"):
+            ret = self._old_read_in(fstream)
+            if label:
+                print_val = self.val
+                if type(print_val) in [unicode,str,bytes]:
+                    print_val = repr(print_val)
+                print '%s\t\t%s\t\t<--\t\t%s (%d)' % (self.__class__, label, print_val, ret)
+            return ret
+        self.read_in = debug_read_in
+
+        self._old_write_out = self.write_out
+        def debug_write_out(fstream, label="<unlabeled>"):
+            ret = self._old_write_out(fstream)
+            if label:
+                print_val = self.val
+                if type(print_val) in [unicode,str,bytes]:
+                    print_val = repr(print_val)
+                print '%s\t\t%s\t\t-->\t\t%s (%d)' % (self.__class__, label, print_val, ret)
+            return ret
+        self.write_out = debug_write_out
 
     def read_in(self, fstream):
         """
@@ -75,6 +96,7 @@ class RestOfPacketString(MySQLDataType):
     AKA the EOF string
     """
     def __init__(self, val):
+        super(RestOfPacketString, self).__init__()
         self.val = bytes(val)
         self.length = len(self.val)
 
@@ -122,15 +144,16 @@ class NulTerminatedString(MySQLDataType):
 
 class LengthEncodedString(MySQLDataType):
     def __init__(self, val=u''):
+        super(LengthEncodedString, self).__init__()
         self.val = val
         self.length = LengthEncodedInteger(len(val)).length + len(val)
 
     def read_in(self, net_fd):
         str_length = LengthEncodedInteger(0)
-        total_read = str_length.read_in(net_fd)
+        total_read = str_length.read_in(net_fd, label=None)
         if str_length.val > 0:
             actual_str = FixedLengthString(str_length.val, u'')
-            total_read += actual_str.read_in(net_fd)
+            total_read += actual_str.read_in(net_fd, label=None)
             self.val = actual_str.val
         else:
             self.val = u''
@@ -138,9 +161,9 @@ class LengthEncodedString(MySQLDataType):
         return total_read
 
     def write_out(self, net_fd):
-        total_written = LengthEncodedInteger(len(self.val)).write_out(net_fd)
+        total_written = LengthEncodedInteger(len(self.val)).write_out(net_fd, label=None)
         if len(self.val) > 0:
-            total_written += FixedLengthString(len(self.val), self.val).write_out(net_fd)
+            total_written += FixedLengthString(len(self.val), self.val).write_out(net_fd, label=None)
         return total_written
 
 
@@ -183,7 +206,7 @@ class LengthEncodedInteger(MySQLDataType):
         if val:
             # stupidly calculate length
             sio = StringIO()
-            self.write_out(sio)
+            self.write_out(sio, label=None)
             self.length = sio.len
         else:
             self.length = 0
@@ -231,12 +254,12 @@ class KeyValueList(MySQLDataType):
     def read_in(self, net_fd):
         kv_size = LengthEncodedInteger(0)
         kv_read = 0
-        total_read = kv_size.read_in(net_fd)
+        total_read = kv_size.read_in(net_fd, label='KV_size')
         while kv_read < kv_size.val:
             key = LengthEncodedString(u'')
-            kv_read += key.read_in(net_fd)
+            kv_read += key.read_in(net_fd, label='KV_key')
             val = LengthEncodedString(u'')
-            kv_read += val.read_in(net_fd)
+            kv_read += val.read_in(net_fd, label='KV_val')
             self.val[key.val] = val.val
         return total_read + kv_read
 

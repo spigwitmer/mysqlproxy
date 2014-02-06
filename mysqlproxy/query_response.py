@@ -115,7 +115,7 @@ class ResultSetText(ResultSet):
         if num_cols == 0 or len(self.rows) == 0:
             return OKPacket(self.client_capabilities, 0, 0, seq_id=self.seq_id).write_out(net_fd)
         opc = OutgoingPacketChain(start_seq_id=seq_id)
-        opc.add_field(LengthEncodedInteger(num_cols))
+        opc.add_field(LengthEncodedInteger(num_cols), 'num_columns')
         total_written, seq_id = opc.write_out(net_fd)
         for column in self.columns:
             column.seq_id = seq_id+1
