@@ -1,11 +1,11 @@
 """
 Packet encapsulation unit tests
 """
-import unittest
+from unittest import main, TestCase
 from StringIO import StringIO
 
 
-class PacketChainTest(unittest.TestCase):
+class PacketChainTest(TestCase):
     """
     Test MySQL protocol packet read-ins, both single and multi
     """
@@ -33,7 +33,7 @@ class PacketChainTest(unittest.TestCase):
         self.assertEquals(pchain.total_length, 0xffffff)
 
 
-class ERRPacketTest(unittest.TestCase):
+class ERRPacketTest(TestCase):
     """
     Test ERRPacket writeout
     """
@@ -51,3 +51,6 @@ class ERRPacketTest(unittest.TestCase):
         schtuff = bytes(proto_buf.read())
 
         self.assertEquals(schtuff, b'\x17\x00\x00\x01\xff\x48\x04#HY000No tables used')
+
+if __name__ == '__main__':
+    main()

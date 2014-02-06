@@ -1,10 +1,10 @@
 """
 Data type unit tests
 """
-import unittest
+from unittest import main, TestCase
 from StringIO import StringIO
 
-class IntegerTest(unittest.TestCase):
+class IntegerTest(TestCase):
     """
     Test MySQL protocol integer types
     """
@@ -33,7 +33,7 @@ class IntegerTest(unittest.TestCase):
         lei.write_out(proto_buf)
         self.assertEqual(proto_buf.getvalue(), expected_buf)
 
-class FixedLengthIntegerTest(unittest.TestCase):
+class FixedLengthIntegerTest(TestCase):
     """
     Test MySQL protocol fixed length integers
     """
@@ -56,3 +56,6 @@ class FixedLengthIntegerTest(unittest.TestCase):
         fli.write_out(proto_buf)
         self.assertEqual(proto_buf.getvalue(), b'\x01\x00\x00')
 
+
+if __name__ == '__main__':
+    main()
