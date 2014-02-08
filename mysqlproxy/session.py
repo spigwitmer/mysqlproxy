@@ -12,6 +12,9 @@ from mysqlproxy import column_types, error_codes as errs
 from hashlib import sha1
 import MySQLdb
 from _mysql_exceptions import ProgrammingError, OperationalError
+import logging
+
+_LOG = logging.getLogger(__name__)
 
 SERVER_CAPABILITIES = capabilities.LONG_PASSWORD \
         | capabilities.FOUND_ROWS \
@@ -288,7 +291,7 @@ class Session(object):
         self.net_fd.flush()
         response = HandshakeResponse()
         response.read_in(self.net_fd)
-        print 'response seq id: %d' % response.seq_id # it better be 1
+        _LOG.debug('response seq id: %d' % response.seq_id) # it better be 1
         success, authenticated, client_caps = self._init_and_authenticate(nonce, response)
         if success:
             if authenticated:

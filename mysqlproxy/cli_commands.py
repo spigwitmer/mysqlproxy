@@ -10,6 +10,9 @@ import socket
 from StringIO import StringIO
 from datetime import datetime
 import _mysql_exceptions
+import logging
+
+_LOG = logging.getLogger(__name__)
 
 COMMAND_CODES = {
     0x01: ('quit', 'cli_command_quit'),
@@ -76,15 +79,15 @@ def handle_client_command(session, cmd_packet_data):
         raise ValueError('no command data')
     cli_command = ord(cmd_packet_data[0])
     if cli_command not in COMMAND_CODES:
-        print 'Received command code %x' % cli_command
+        _LOG.debug('Received command code %x', cli_command)
         session.send_payload(ERRPacket(
             session.client_capabilities, \
                     error_code=9999, error_msg='Wait what?', seq_id=1))
         return True
 
     command_name, command_fn_name = COMMAND_CODES[cli_command]
-    print 'Received command code %x (%s)' % \
-            (cli_command, command_fn_name)
+    _LOG.debug('Received command code %x (%s)' % \
+            (cli_command, command_fn_name))
     command_fn = globals().get(command_fn_name, unknown_cli_command)
     return command_fn(session, cmd_packet_data[1:], cli_command)
 
@@ -108,7 +111,7 @@ def cli_command_quit(session, pkt_data, code):
 
 def cli_command_query(session_obj, pkt_data, code):
     query = pkt_data
-    print 'Got query command: %s' % query
+    _LOG.debug('Got query command: %s' % query)
     if query.lower() == 'select @@version_comment limit 1':
         # intercept the MySQL client getting version info, replace with our own
         response = ResultSetText(session_obj.client_capabilities,
@@ -117,12 +120,6 @@ def cli_command_query(session_obj, pkt_data, code):
         row_val = u'mysqlproxy 0.1 -- 2014 Pat Mac'
         response.add_column(col_name, column_types.VAR_STRING, len(row_val))
         response.add_row([row_val])
-    elif query.lower() == 'select 1':
-        print 'INTERCEPTING "select 1"'
-        response = ResultSetText(session_obj.client_capabilities,
-            flags=session_obj.server_status)
-        response.add_column(u'1', column_types.LONGLONG, 1)
-        response.add_row([1L])
     else:
         response = session_obj.proxy_obj.build_response_from_query(query)
     session_obj.send_payload(response)

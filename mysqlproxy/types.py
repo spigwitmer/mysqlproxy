@@ -3,6 +3,9 @@ Protocol wire types
 """
 import struct
 from StringIO import StringIO
+import logging
+
+_LOG = logging.getLogger(__name__)
 
 __all__ = [
     'MySQLDataType',
@@ -41,7 +44,7 @@ class MySQLDataType(object):
                 print_val = self.val
                 if type(print_val) in [unicode,str,bytes]:
                     print_val = repr(print_val)
-                print '%s\t\t%s\t\t<--\t\t%s (%d)' % (self.__class__, label, print_val, ret)
+                _LOG.debug('%s\t\t%s\t\t<--\t\t%s (%d)' % (self.__class__, label, print_val, ret))
             return ret
         self.read_in = debug_read_in
 
@@ -52,7 +55,7 @@ class MySQLDataType(object):
                 print_val = self.val
                 if type(print_val) in [unicode,str,bytes]:
                     print_val = repr(print_val)
-                print '%s\t\t%s\t\t-->\t\t%s (%d)' % (self.__class__, label, print_val, ret)
+                _LOG.debug('%s\t\t%s\t\t-->\t\t%s (%d)' % (self.__class__, label, print_val, ret))
             return ret
         self.write_out = debug_write_out
 
