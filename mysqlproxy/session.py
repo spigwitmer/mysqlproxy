@@ -31,6 +31,10 @@ SERVER_CAPABILITIES = capabilities.LONG_PASSWORD \
         | capabilities.PS_MULTI_RESULTS \
         | capabilities.CONNECT_ATTRS
 
+# stuff that we will always support transparently
+PERMANENT_SERVER_CAPABILITIES = capabilities.PROTOCOL_41 \
+    | capabilities.SECURE_CONNECTION
+
 PERMANENT_STATUS_FLAGS = status_flags.STATUS_AUTOCOMMIT
 
 def generate_nonce(nsize=20):
@@ -39,8 +43,6 @@ def generate_nonce(nsize=20):
 class HandshakeV10(Packet):
     def __init__(self, server_capabilities, nonce, **kwargs):
         super(HandshakeV10, self).__init__(0, **kwargs)
-        # TODO: is server_capabilities even needed?
-        server_capabilities = SERVER_CAPABILITIES
         self.server_capabilities = server_capabilities
         self.nonce = nonce
         # forcing mysql_native_password as auth method
@@ -79,29 +81,29 @@ class HandshakeResponse(Packet):
         client_caps = self.get_field('client_capabilities').val
         if client_caps & capabilities.SECURE_CONNECTION:
             auth_resp_len = FixedLengthInteger(1, 0)
-            read_length += auth_resp_len.read_in(pl_fd)
+            read_length += auth_resp_len.read_in(pl_fd, label='auth_resp_len')
             self.fields.append(('auth_response_len', auth_resp_len))
             auth_response = FixedLengthString(auth_resp_len.val, b'\x00' * auth_resp_len.val)
             if auth_resp_len.val > 0:
-                read_length += auth_response.read_in(pl_fd)
+                read_length += auth_response.read_in(pl_fd, label='auth_response')
         else:
             auth_response = NulTerminatedString(u'')
-            read_length += auth_response.read_in(pl_fd)
+            read_length += auth_response.read_in(pl_fd, label='auth_response')
         self.fields.append(('auth_response', auth_response))
         if client_caps & capabilities.CONNECT_WITH_DB:
             db_name = NulTerminatedString(u'')
-            read_length += db_name.read_in(pl_fd)
+            read_length += db_name.read_in(pl_fd, label='db_name')
             self.fields.append(('db_name', db_name))
         if client_caps & capabilities.PLUGIN_AUTH and packet_size - read_length > 0:
             # some asshole clients respond with the PLUGIN_AUTH
             # capability even though we explicitly clear that
             # flag in our own handshake.
             plugin_auth_name = NulTerminatedString(u'')
-            read_length += plugin_auth_name.read_in(pl_fd)
+            read_length += plugin_auth_name.read_in(pl_fd, 'plugin_auth_name')
             self.fields.append(('plugin_auth_name', plugin_auth_name))
         if client_caps & capabilities.CONNECT_ATTRS:
             client_attrs = KeyValueList({})
-            read_length += client_attrs.read_in(pl_fd)
+            read_length += client_attrs.read_in(pl_fd, label='client_attrs')
             self.fields.append(('client_attrs', client_attrs))
         return read_length
 
@@ -139,7 +141,8 @@ class SQLProxy(object):
             # static user:passwd combo to access the proxy
             self.client_user = kwargs['client_user']
             self.client_passwd = kwargs['client_passwd']
-        self.session = Session(client_fd, self)
+        self.session = Session(client_fd, self, 
+            self.client_conn.server_capabilities | PERMANENT_SERVER_CAPABILITIES)
 
     def change_db(self, dbname):
         """
@@ -201,12 +204,12 @@ class Session(object):
     always act as a FIFO (a.k.a. if you're going through UDP,
     do your own packet mangling).
     """
-    def __init__(self, fde, proxy_obj):
+    def __init__(self, fde, proxy_obj, server_capabilities):
         self.net_fd = fde
         self.connected = True
         self.default_db = None
         self.client_capabilities = 0
-        self.server_capabilities = SERVER_CAPABILITIES
+        self.server_capabilities = server_capabilities
         self.server_status = PERMANENT_STATUS_FLAGS
         self.proxy_obj = proxy_obj
 
@@ -290,6 +293,7 @@ class Session(object):
         handshake_pkt.write_out(self.net_fd)
         self.net_fd.flush()
         response = HandshakeResponse()
+        # TODO: SSL / Compression
         response.read_in(self.net_fd)
         _LOG.debug('response seq id: %d' % response.seq_id) # it better be 1
         success, authenticated, client_caps = self._init_and_authenticate(nonce, response)
