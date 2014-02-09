@@ -1,5 +1,5 @@
 """
-class responsible for IO and
+classes responsible for IO and
 session state.
 """
 from mysqlproxy.packet import OKPacket, ERRPacket, Packet, \
@@ -302,7 +302,7 @@ class Session(object):
             else:
                 resp_pkt = ERRPacket(client_caps,
                     error_code=errs.ACCESS_DENIED,
-                    error_msg='LOL NO GOODBYE',
+                    error_msg='Access denied',
                     seq_id=2)
         else:
             resp_pkt = client_caps
