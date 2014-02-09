@@ -4,7 +4,11 @@ Plugin framework
 import logging
 import os
 import imp
+import sys
 
+# this stops python from whining about trying to get logging
+# handlers for a module that doesn't really exist
+sys.modules['mysqlproxy_plugins'] = imp.new_module('mysqlproxy_plugins')
 
 _LOG = logging.getLogger(__name__)
 
@@ -56,7 +60,7 @@ class PluginRegistry(object):
                     for some_attr in dir(mod):
                         mod_attr = getattr(mod, some_attr)
                         if Plugin in getattr(mod_attr, '__bases__', []):
-                            yield mod_attr
+                            yield mod_attr()
 
     def add_all_plugins(self, plugins_dir):
         for plugin in self._discover_plugins(plugins_dir):
