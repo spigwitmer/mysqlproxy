@@ -7,8 +7,9 @@ from mysqlproxy.packet import OKPacket, ERRPacket, Packet, \
 from mysqlproxy.types import *
 from mysqlproxy import capabilities, cli_commands, status_flags
 from mysqlproxy.query_response import ResultSetText
-from random import randint
 from mysqlproxy import column_types, error_codes as errs
+from mysqlproxy.plugin import PluginRegistry
+from random import randint
 from hashlib import sha1
 import MySQLdb
 from _mysql_exceptions import ProgrammingError, OperationalError
@@ -16,20 +17,11 @@ import logging
 
 _LOG = logging.getLogger(__name__)
 
-SERVER_CAPABILITIES = capabilities.LONG_PASSWORD \
-        | capabilities.FOUND_ROWS \
-        | capabilities.LONG_FLAG \
-        | capabilities.CONNECT_WITH_DB \
-        | capabilities.NO_SCHEMA \
-        | capabilities.IGNORE_SPACE \
-        | capabilities.PROTOCOL_41 \
-        | capabilities.INTERACTIVE \
-        | capabilities.TRANSACTIONS \
-        | capabilities.SECURE_CONNECTION \
-        | capabilities.MULTI_STATEMENTS \
-        | capabilities.MULTI_RESULTS \
-        | capabilities.PS_MULTI_RESULTS \
-        | capabilities.CONNECT_ATTRS
+# stuff that we will flat out not support no matter what
+# the target host reports in its capabilities
+SERVER_INCAPABILITIES = capabilities.COMPRESS \
+    | capabilities.SSL \
+    | capabilities.PLUGIN_AUTH
 
 # stuff that we will always support transparently
 PERMANENT_SERVER_CAPABILITIES = capabilities.PROTOCOL_41 \
@@ -37,11 +29,13 @@ PERMANENT_SERVER_CAPABILITIES = capabilities.PROTOCOL_41 \
 
 PERMANENT_STATUS_FLAGS = status_flags.STATUS_AUTOCOMMIT
 
+
 def generate_nonce(nsize=20):
     return ''.join([chr(randint(1, 255)) for _ in range(0, nsize)])
 
+
 class HandshakeV10(Packet):
-    def __init__(self, server_capabilities, nonce, **kwargs):
+    def __init__(self, server_capabilities, nonce, status_flags, **kwargs):
         super(HandshakeV10, self).__init__(0, **kwargs)
         self.server_capabilities = server_capabilities
         self.nonce = nonce
@@ -54,12 +48,22 @@ class HandshakeV10(Packet):
             ('filler', FixedLengthInteger(1, 0)),
             ('cap_flags_lower', FixedLengthInteger(2, server_capabilities & 0xffff)),
             ('charset', FixedLengthInteger(1, 0x21)),
-            ('status_flags', FixedLengthInteger(2, 0)),
+            ('status_flags', FixedLengthInteger(2, status_flags)),
             ('cap_flags_upper', FixedLengthInteger(2, (server_capabilities >> 16))),
-            ('reserved', FixedLengthInteger(1, 0)),
-            ('also_reserved', FixedLengthString(10, '\x00' * 10)),
-            ('auth_data_2', FixedLengthString(13, bytes(nonce[8:]) + b'\x00'))
             ]
+
+        if server_capabilities & capabilities.PLUGIN_AUTH:
+            self.fields.append(('auth_plugin_data_len', FixedLengthInteger(1, 13)))
+        else:
+            self.fields.append(('reserved', FixedLengthInteger(1, 0)))
+
+        self.fields += [
+            ('also_reserved', FixedLengthString(10, '\x00' * 10)),
+            ('auth_data_2', FixedLengthString(13, bytes(nonce[8:]) + b'\x00')),
+            ]
+        if server_capabilities & capabilities.PLUGIN_AUTH:
+            self.fields.append(('auth_plugin_name', 
+                NulTerminatedString(u'mysql_native_password')))
 
 
 class HandshakeResponse(Packet):
@@ -95,9 +99,6 @@ class HandshakeResponse(Packet):
             read_length += db_name.read_in(pl_fd, label='db_name')
             self.fields.append(('db_name', db_name))
         if client_caps & capabilities.PLUGIN_AUTH and packet_size - read_length > 0:
-            # some asshole clients respond with the PLUGIN_AUTH
-            # capability even though we explicitly clear that
-            # flag in our own handshake.
             plugin_auth_name = NulTerminatedString(u'')
             read_length += plugin_auth_name.read_in(pl_fd, 'plugin_auth_name')
             self.fields.append(('plugin_auth_name', plugin_auth_name))
@@ -142,7 +143,10 @@ class SQLProxy(object):
             self.client_user = kwargs['client_user']
             self.client_passwd = kwargs['client_passwd']
         self.session = Session(client_fd, self, 
-            self.client_conn.server_capabilities | PERMANENT_SERVER_CAPABILITIES)
+            (self.client_conn.server_capabilities | PERMANENT_SERVER_CAPABILITIES) \
+                & (0xffffffff ^ SERVER_INCAPABILITIES))
+
+        self.plugins = PluginRegistry()
 
     def change_db(self, dbname):
         """
@@ -271,12 +275,26 @@ class Session(object):
                     seq_id=2
                     )
 
+        plugin_continue, ret_val = self.proxy_obj.plugins.call_hooks('auth',
+            self, response, username)
+        if not plugin_continue:
+            return True, ret_val, cap_flags
+
+        try:
+            if response.get_field('plugin_auth_name').val != 'mysql_native_password':
+                return False, False, ERRPacket(cap_flags,
+                    error_code=errs.ACCESS_DENIED,
+                    error_msg='I only speak mysql_native_passwd for auth!',
+                    seq_id=2)
+        except:
+            pass
+
         #XXX what about forward_auth?
         valid_users = {
             self.proxy_obj.client_user: self.proxy_obj.client_passwd
             }
         if username not in valid_users:
-            return False, cap_flags
+            return True, False, cap_flags
 
         passwd_sha = sha1(valid_users[username]).digest()
         hashed_nonce = sha1(nonce + sha1(passwd_sha).digest()).digest()
@@ -289,7 +307,8 @@ class Session(object):
         Send handshake, get handshake, something like that
         """
         nonce = generate_nonce()
-        handshake_pkt = HandshakeV10(0, nonce, seq_id=0)
+        handshake_pkt = HandshakeV10(self.server_capabilities | PERMANENT_SERVER_CAPABILITIES, nonce,
+            self.server_status, seq_id=0)
         handshake_pkt.write_out(self.net_fd)
         self.net_fd.flush()
         response = HandshakeResponse()
@@ -302,6 +321,7 @@ class Session(object):
                 resp_pkt = OKPacket(client_caps,
                     affected_rows=0,
                     last_insert_id=0,
+                    status_flags=self.server_status,
                     seq_id=2)
             else:
                 resp_pkt = ERRPacket(client_caps,

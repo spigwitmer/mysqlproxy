@@ -1,0 +1,69 @@
+#!/usr/bin/env python2
+
+import socket
+from mysqlproxy.util import fsocket
+from mysqlproxy.session import SQLProxy
+import argparse
+import logging
+
+def main():
+    parser = argparse.ArgumentParser(description='mysqlproxy')
+    parser.add_argument('-H', '--target-host', metavar='hostname', default='127.0.0.1',
+        required=False, help='Target hostname', type=str)
+    parser.add_argument('-P', '--target-port', metavar='port', default=3306,
+        required=False, help='Target host port', type=int)
+    parser.add_argument('-u', '--target-user', metavar='username', default='root',
+        required=False, help='Target host client username', type=str)
+    parser.add_argument('-p', '--target-passwd', metavar='password', default='',
+        required=False, help='Target host client password', type=str)
+    parser.add_argument('-s', '--socket', metavar='socket_path', default='',
+        required=False, help='Use UNIX socket instead of TCP', type=str)
+
+    parser.add_argument('-c', '--proxy-user', metavar='username', default='root',
+        required=False, help='Target host client username', type=str)
+    parser.add_argument('-x', '--proxy-passwd', metavar='password', default='',
+        required=False, help='Target host client password', type=str)
+
+    parser.add_argument('-l', '--listen-port', metavar='listen_port', default=5595,
+        required=False, help='Have proxy listen in on this TCP port', type=int)
+
+    parser.add_argument('-j', '--plugins-dir', metavar='plugins_dir', default='',
+        required=False, help='Directory path where plugins are located', type=str)
+
+    parser.add_argument('-v', '--verbose', required=False,
+        help='Set verbose (or verbosity level)', action='store_true')
+
+    largs = parser.parse_args()
+
+    if largs.verbose:
+        logging.basicConfig(level=logging.DEBUG)
+
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(('127.0.0.1', int(largs.listen_port)))
+    s.listen(0)
+
+    incoming, (remote_host, remote_port) = s.accept()
+    fsock = incoming.makefile('r+b', bufsize=0)
+
+    try:
+        proxy = SQLProxy(fsock,
+            host=largs.target_host,
+            port=largs.target_port,
+            user=largs.target_user,
+            passwd=largs.target_passwd,
+            client_user=largs.proxy_user,
+            client_passwd=largs.proxy_passwd)
+        if largs.plugins_dir:
+            proxy.plugins.add_all_plugins(largs.plugins_dir)
+        proxy.start()
+    except Exception, ex:
+        print '=~'*10 + ' LOL DED ' + '=~'*10
+        import pdb; pdb.post_mortem()
+        import traceback
+        traceback.print_exc()
+        fsock.close()
+        raise ex
+
+if __name__ == '__main__':
+    main()

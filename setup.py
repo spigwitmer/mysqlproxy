@@ -12,7 +12,7 @@ setup(
     name='mysqlproxy',
     version=VERSION,
     packages=['mysqlproxy'],
-    scripts=['bin/mysqlproxy-standalone'],
+    scripts=['scripts/mysqlproxy-standalone'],
     description='proxy library for MySQL',
     author='Pat Mac',
     author_email='itgpmc@gmail.com',
