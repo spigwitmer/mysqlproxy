@@ -20,8 +20,7 @@ _LOG = logging.getLogger(__name__)
 # stuff that we will flat out not support no matter what
 # the target host reports in its capabilities
 SERVER_INCAPABILITIES = capabilities.COMPRESS \
-    | capabilities.SSL \
-    | capabilities.PLUGIN_AUTH
+    | capabilities.SSL
 
 # stuff that we will always support transparently
 PERMANENT_SERVER_CAPABILITIES = capabilities.PROTOCOL_41 \
@@ -53,7 +52,7 @@ class HandshakeV10(Packet):
             ]
 
         if server_capabilities & capabilities.PLUGIN_AUTH:
-            self.fields.append(('auth_plugin_data_len', FixedLengthInteger(1, 13)))
+            self.fields.append(('auth_plugin_data_len', FixedLengthInteger(1, 21)))
         else:
             self.fields.append(('reserved', FixedLengthInteger(1, 0)))
 
@@ -179,8 +178,8 @@ class SQLProxy(object):
             num_rows = cursor.execute(query)
             if num_rows == 0:
                 return OKPacket(self.session.client_capabilities,
-                    affected_rows=conn.affected_rows(),
-                    last_insert_id=conn.insert_id(),
+                    affected_rows=0,
+                    last_insert_id=0,
                     seq_id=1
                     )
             col_types = cursor.description
