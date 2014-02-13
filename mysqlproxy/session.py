@@ -9,10 +9,12 @@ from mysqlproxy import capabilities, cli_commands, status_flags
 from mysqlproxy.query_response import ResultSetText
 from mysqlproxy import column_types, error_codes as errs
 from mysqlproxy.plugin import PluginRegistry
+from mysqlproxy.forward_auth import ForwardAuthConnection
 from random import randint
 from hashlib import sha1
-import MySQLdb
-from _mysql_exceptions import ProgrammingError, OperationalError
+import pymysql
+from pymysql.err import ProgrammingError, \
+        OperationalError, InternalError
 import logging
 
 _LOG = logging.getLogger(__name__)
@@ -129,15 +131,17 @@ class SQLProxy(object):
         self.user = user
         self.passwd = passwd
 
-        self.client_conn = MySQLdb.connect(self.host, port=port, user=user, passwd=passwd)
-        self.forward_auth = kwargs.get('forward_auth', False)
+        unix_socket = kwargs.pop('socket', None)
+        self.forward_auth = kwargs.pop('forward_auth', False)
         if self.forward_auth:
-            # TODO: if we're forwarding client credentials to our target server,
-            # find out if we can actually access the mysql.user table.
-            # Read that in, filter anything using <4.1 auth, and go from
-            # there.
-            raise NotImplementedError('forward_auth')
+            connection_class = ForwardAuthConnection
         else:
+            connection_class = pymysql.Connection
+        if unix_socket:
+            self.client_conn = connection_class(unix_socket=unix_socket, user=user, passwd=passwd)
+        else:
+            self.client_conn = connection_class(self.host, port=port, user=user, passwd=passwd)
+        if not self.forward_auth:
             # static user:passwd combo to access the proxy
             self.client_user = kwargs['client_user']
             self.client_passwd = kwargs['client_passwd']
@@ -156,7 +160,7 @@ class SQLProxy(object):
             self.client_conn.select_db(dbname)
             return OKPacket(self.session.client_capabilities,
                 0, 0, seq_id=1)
-        except OperationalError as ex:
+        except (OperationalError, InternalError) as ex:
             err_code, err_msg = ex
             return ERRPacket(self.session.client_capabilities,
                 error_code=err_code, error_msg=err_msg, seq_id=1)
@@ -194,7 +198,7 @@ class SQLProxy(object):
                 lvals = list(row)
                 response.add_row(lvals)
             return response
-        except (ProgrammingError, OperationalError) as ex:
+        except (InternalError, ProgrammingError, OperationalError) as ex:
             err_code, err_msg = ex
             return ERRPacket(self.session.client_capabilities,
                 error_code=err_code, error_msg=err_msg, seq_id=1)
@@ -265,6 +269,14 @@ class Session(object):
         username = response.get_field('username').val
         auth_response = response.get_field('auth_response').val
 
+        if self.proxy_obj.forward_auth:
+            if not auth_response:
+                auth_response = '\0' # empty password
+            self.proxy_obj.client_conn.user = username
+            self.proxy_obj.client_conn._request_authentication(auth_response)
+            self.proxy_obj.client_conn.post_auth_routine()
+            return True, True, cap_flags
+
         if not cap_flags & capabilities.PROTOCOL_41:
             # Forget about it, we will not support the
             # 3.2 protocol
@@ -288,50 +300,66 @@ class Session(object):
         except:
             pass
 
-        #XXX what about forward_auth?
         valid_users = {
             self.proxy_obj.client_user: self.proxy_obj.client_passwd
             }
         if username not in valid_users:
             return True, False, cap_flags
 
-        passwd_sha = sha1(valid_users[username]).digest()
-        hashed_nonce = sha1(nonce + sha1(passwd_sha).digest()).digest()
-        expected_auth_response = \
-                ''.join([chr(ord(passwd_sha[x]) ^ ord(hashed_nonce[x])) for x in range(0, 20)])
+        if auth_response:
+            passwd_sha = sha1(valid_users[username]).digest()
+            hashed_nonce = sha1(nonce + sha1(passwd_sha).digest()).digest()
+            expected_auth_response = \
+                    ''.join([chr(ord(passwd_sha[x]) ^ ord(hashed_nonce[x])) for x in range(0, 20)])
+        else:
+            # username with no password
+            if valid_users[username] in (None, ''):
+                expected_auth_response = auth_response
+            else:
+                return True, False, cap_flags
         return True, expected_auth_response == auth_response, cap_flags
 
     def do_handshake(self):
         """
         Send handshake, get handshake, something like that
         """
-        nonce = generate_nonce()
-        handshake_pkt = HandshakeV10(self.server_capabilities | PERMANENT_SERVER_CAPABILITIES, nonce,
-            self.server_status, seq_id=0)
-        handshake_pkt.write_out(self.net_fd)
-        self.net_fd.flush()
-        response = HandshakeResponse()
-        # TODO: SSL / Compression
-        response.read_in(self.net_fd)
-        _LOG.debug('response seq id: %d' % response.seq_id) # it better be 1
-        success, authenticated, client_caps = self._init_and_authenticate(nonce, response)
-        if success:
-            if authenticated:
-                resp_pkt = OKPacket(client_caps,
-                    affected_rows=0,
-                    last_insert_id=0,
-                    status_flags=self.server_status,
-                    seq_id=2)
+        last_seq_id = 0
+        try:
+            if self.proxy_obj.forward_auth:
+                nonce = self.proxy_obj.client_conn.salt
             else:
-                resp_pkt = ERRPacket(client_caps,
-                    error_code=errs.ACCESS_DENIED,
-                    error_msg='Access denied',
-                    seq_id=2)
-        else:
-            resp_pkt = client_caps
-        resp_pkt.write_out(self.net_fd)
-        self.net_fd.flush()
-        return authenticated
+                nonce = generate_nonce()
+            handshake_pkt = HandshakeV10(self.server_capabilities | PERMANENT_SERVER_CAPABILITIES, nonce,
+                self.server_status, seq_id=0)
+            handshake_pkt.write_out(self.net_fd)
+            last_seq_id += 2
+            self.net_fd.flush()
+            response = HandshakeResponse()
+            # TODO: SSL / Compression
+            response.read_in(self.net_fd)
+            _LOG.debug('response seq id: %d' % response.seq_id) # it better be 1
+            success, authenticated, client_caps = self._init_and_authenticate(nonce, response)
+            if success:
+                if authenticated:
+                    resp_pkt = OKPacket(client_caps,
+                        affected_rows=0,
+                        last_insert_id=0,
+                        status_flags=self.server_status,
+                        seq_id=2)
+                else:
+                    resp_pkt = ERRPacket(client_caps,
+                        error_code=errs.ACCESS_DENIED,
+                        error_msg='Access denied',
+                        seq_id=2)
+            else:
+                resp_pkt = client_caps
+            resp_pkt.write_out(self.net_fd)
+            self.net_fd.flush()
+            return authenticated
+        except Exception as ex:
+            ERRPacket(0, 9999, 'Internal Server Error: %s' % ex,
+                seq_id=last_seq_id).write_out(self.net_fd)
+            return False
         
     def disconnect(self):
         self.net_fd.close()

@@ -9,7 +9,7 @@ import sys
 import socket
 from StringIO import StringIO
 from datetime import datetime
-import _mysql_exceptions
+from pymysql import err
 import logging
 
 _LOG = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ def handle_client_command(session, cmd_packet_data):
 def cli_change_db(session_obj, pkt_data, code):
     schema_name = pkt_data
     response = session_obj.proxy_obj.change_db(schema_name)
-    session.send_payload(response)
+    session_obj.send_payload(response)
     return True
 
 
