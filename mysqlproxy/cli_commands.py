@@ -10,7 +10,9 @@ import socket
 from StringIO import StringIO
 from datetime import datetime
 from pymysql import err
+from pymysql.cursors import DictCursor
 import logging
+import re
 
 _LOG = logging.getLogger(__name__)
 
@@ -125,7 +127,23 @@ def cli_command_query(session_obj, pkt_data, code):
     session_obj.send_payload(response)
     return True
 
+
 def cli_command_field_list(session_obj, pkt_data, code):
+    table_name, wildcard = pkt_data.split('\x00')[:2]
+    if not re.match(r'^[a-zA-Z0-9_]+', table_name):
+        session_obj.send_payload(ERRPacket(
+            session_obj.client_capabilities, 1049,
+            u'Invalid table name', seq_id=1))
+        return True
+
+    if not re.match(r'^[a-zA-Z0-9_%]+', table_name):
+        session_obj.send_payload(ERRPacket(
+            session_obj.client_capabilities, 1049,
+            u'Invalid wildcard', seq_id=1))
+        return True
+
+    cli_con = session_obj.proxy_obj.client_conn
+    cursor = cli_con.cursor(DictCursor)
     payload = [
         ColumnDefinition(u'this',
             column_types.VAR_STRING,

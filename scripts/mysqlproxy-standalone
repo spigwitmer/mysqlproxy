@@ -33,6 +33,10 @@ def main():
     parser.add_argument('-v', '--verbose', required=False,
         help='Set verbose (or verbosity level)', action='store_true')
 
+    parser.add_argument('-f', '--forward-auth', required=False,
+        help='Forward authentication to target MySQL instance.',
+        action='store_true')
+
     largs = parser.parse_args()
 
     if largs.verbose:
@@ -43,27 +47,28 @@ def main():
     s.bind(('127.0.0.1', int(largs.listen_port)))
     s.listen(0)
 
-    incoming, (remote_host, remote_port) = s.accept()
-    fsock = incoming.makefile('r+b', bufsize=0)
+    while True:
+        incoming, (remote_host, remote_port) = s.accept()
+        fsock = incoming.makefile('r+b', bufsize=0)
 
-    try:
-        proxy = SQLProxy(fsock,
-            host=largs.target_host,
-            port=largs.target_port,
-            user=largs.target_user,
-            passwd=largs.target_passwd,
-            client_user=largs.proxy_user,
-            client_passwd=largs.proxy_passwd)
-        if largs.plugins_dir:
-            proxy.plugins.add_all_plugins(largs.plugins_dir)
-        proxy.start()
-    except Exception, ex:
-        print '=~'*10 + ' LOL DED ' + '=~'*10
-        import pdb; pdb.post_mortem()
-        import traceback
-        traceback.print_exc()
-        fsock.close()
-        raise ex
+        try:
+            proxy = SQLProxy(fsock,
+                host=largs.target_host,
+                port=largs.target_port,
+                user=largs.target_user,
+                passwd=largs.target_passwd,
+                client_user=largs.proxy_user,
+                client_passwd=largs.proxy_passwd,
+                socket=largs.socket,
+                forward_auth=largs.forward_auth)
+            if largs.plugins_dir:
+                proxy.plugins.add_all_plugins(largs.plugins_dir)
+            proxy.start()
+        except Exception, ex:
+            import traceback
+            print 'Exception occured during session: %s' % ex
+            traceback.print_exc()
+            fsock.close()
 
 if __name__ == '__main__':
     main()

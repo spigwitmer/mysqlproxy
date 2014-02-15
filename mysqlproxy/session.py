@@ -243,12 +243,18 @@ class Session(object):
         """
         while self.connected:
             cmd_packet = self.get_next_client_command()
-            if not cli_commands.handle_client_command(self, cmd_packet):
-                try:
-                    self.net_fd.close()
-                except:
-                    pass
-                self.connected = False
+            try:
+                if not cli_commands.handle_client_command(self, cmd_packet):
+                    try:
+                        self.net_fd.close()
+                    except:
+                        pass
+                    self.connected = False
+            except (InternalError, OperationalError, 
+                    ProgrammingError) as ex:
+                self.send_payload(ERRPacket(self.client_capabilities,
+                    9999, u'Error occured during operation: %s' % ex,
+                    seq_id=1))
             
     def get_next_client_command(self):
         """
