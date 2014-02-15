@@ -6,7 +6,7 @@ response.  Instead, we want to just grab any auth info and
 forward that to our own client.
 """
 from pymysql.connections import _makefile, MysqlPacket, \
-        Connection, pack_int24, unpack_uint16, \
+        pack_int24, unpack_uint16, \
         unpack_int24, unpack_int32, unpack_int64
 from pymysql.util import int2byte, byte2int
 from pymysql.err import OperationalError
@@ -15,6 +15,7 @@ from pymysql.constants.COMMAND import *
 from pymysql.charset import charset_by_name
 from pymysql._compat import text_type
 from functools import partial
+from mysqlproxy.client import ProxyConnection
 import os
 import hashlib
 import socket
@@ -24,7 +25,7 @@ import io
 
 DEBUG = False
 
-class ForwardAuthConnection(Connection):
+class ForwardAuthConnection(ProxyConnection):
     """
     Yanked straight from pymysql
     """
@@ -35,6 +36,7 @@ class ForwardAuthConnection(Connection):
         and grab the salt.
         """
         sock = None
+        self.forwarded_auth_reseponse
         try:
             if self.unix_socket and self.host in ('localhost', '127.0.0.1'):
                 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -67,7 +69,11 @@ class ForwardAuthConnection(Connection):
             raise OperationalError(
                 2003, "Can't connect to MySQL server on %r (%s)" % (self.host, e))
 
-    def _request_authentication(self, auth_response='\0'):
+    def forward_authentication(self, auth_response='\0'):
+        self.forwarded_auth_reseponse = auth_response
+        self._request_authentication()
+
+    def _request_authentication(self):
         self.client_flag |= CAPABILITIES
         if self.server_version.startswith('5'):
             self.client_flag |= MULTI_RESULTS
@@ -97,7 +103,7 @@ class ForwardAuthConnection(Connection):
                                           cert_reqs=ssl.CERT_REQUIRED,
                                           ca_certs=self.ca)
 
-        data = data_init + self.user + b'\0' + auth_response
+        data = data_init + self.user + b'\0' + self.forwarded_auth_response
 
         if self.db:
             if isinstance(self.db, text_type):
@@ -131,6 +137,10 @@ class ForwardAuthConnection(Connection):
             if DEBUG: auth_packet.dump()
 
     def post_auth_routine(self):
+        """
+        Anything that was initialized in a PyMySQL connection
+        after a successful authentication
+        """
         try:
             if self.sql_mode is not None:
                 c = self.cursor()

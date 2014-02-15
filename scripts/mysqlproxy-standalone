@@ -17,7 +17,7 @@ def main():
     parser.add_argument('-p', '--target-passwd', metavar='password', default='',
         required=False, help='Target host client password', type=str)
     parser.add_argument('-s', '--socket', metavar='socket_path', default='',
-        required=False, help='Use UNIX socket instead of TCP', type=str)
+        required=False, help='Use target UNIX socket instead of TCP', type=str)
 
     parser.add_argument('-c', '--proxy-user', metavar='username', default='root',
         required=False, help='Target host client username', type=str)
@@ -31,7 +31,7 @@ def main():
         required=False, help='Directory path where plugins are located', type=str)
 
     parser.add_argument('-v', '--verbose', required=False,
-        help='Set verbose (or verbosity level)', action='store_true')
+        help='Set verbose', action='store_true')
 
     parser.add_argument('-f', '--forward-auth', required=False,
         help='Forward authentication to target MySQL instance.',

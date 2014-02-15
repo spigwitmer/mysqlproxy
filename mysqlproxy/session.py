@@ -10,6 +10,7 @@ from mysqlproxy.query_response import ResultSetText
 from mysqlproxy import column_types, error_codes as errs
 from mysqlproxy.plugin import PluginRegistry
 from mysqlproxy.forward_auth import ForwardAuthConnection
+from mysqlproxy.client import ProxyConnection
 from random import randint
 from hashlib import sha1
 import pymysql
@@ -136,7 +137,7 @@ class SQLProxy(object):
         if self.forward_auth:
             connection_class = ForwardAuthConnection
         else:
-            connection_class = pymysql.Connection
+            connection_class = ProxyConnection
         if unix_socket:
             self.client_conn = connection_class(unix_socket=unix_socket, user=user, passwd=passwd)
         else:
@@ -180,14 +181,15 @@ class SQLProxy(object):
         try:
             cursor = self.client_conn.cursor()
             num_rows = cursor.execute(query)
-            if num_rows == 0:
+            results = cursor.fetchall()
+            if not results or len(results) == 0:
+                cursor.close()
                 return OKPacket(self.session.client_capabilities,
-                    affected_rows=0,
-                    last_insert_id=0,
+                    affected_rows=num_rows,
+                    last_insert_id=cursor.lastrowid,
                     seq_id=1
                     )
             col_types = cursor.description
-            results = cursor.fetchall()
             cursor.close()
             response = ResultSetText(self.session.client_capabilities,
                 flags=self.session.server_status)
@@ -347,6 +349,11 @@ class Session(object):
             success, authenticated, client_caps = self._init_and_authenticate(nonce, response)
             if success:
                 if authenticated:
+                    try:
+                        db_name = response.get_field('db_name').val
+                        self.proxy_obj.client_conn.select_db(db_name)
+                    except ValueError:
+                        pass
                     resp_pkt = OKPacket(client_caps,
                         affected_rows=0,
                         last_insert_id=0,

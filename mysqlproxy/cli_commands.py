@@ -1,7 +1,7 @@
 """
 Client to server command handling
 """
-from mysqlproxy.packet import ERRPacket, OKPacket
+from mysqlproxy.packet import ERRPacket, OKPacket, EOFPacket
 from mysqlproxy.query_response import ResultSetText, ResultSetRowText, \
     ResultSetBinary, ResultSetRowBinary, ColumnDefinition
 from mysqlproxy import column_types
@@ -119,7 +119,7 @@ def cli_command_query(session_obj, pkt_data, code):
         response = ResultSetText(session_obj.client_capabilities,
             flags=session_obj.server_status)
         col_name = u'@@version_comment'
-        row_val = u'mysqlproxy 0.1 -- 2014 Pat Mac'
+        row_val = u'mysqlproxy-0.1'
         response.add_column(col_name, column_types.VAR_STRING, len(row_val))
         response.add_row([row_val])
     else:
@@ -143,45 +143,19 @@ def cli_command_field_list(session_obj, pkt_data, code):
         return True
 
     cli_con = session_obj.proxy_obj.client_conn
-    cursor = cli_con.cursor(DictCursor)
-    payload = [
-        ColumnDefinition(u'this',
-            column_types.VAR_STRING,
-            255 * 3, 0x21, # unicode (with char count 3)
-            decimals=31,
-            show_default=True,
-            seq_id=1
-            ),
-        ColumnDefinition(u'is',
-            column_types.SHORT,
-            2, 0x21,
-            decimals=0,
-            default=29,
-            show_default=True,
-            seq_id=2
-            ),
-        ## DATETIME
-        # MySQL's source sez:
-        # ** In string context: YYYY-MM-DD HH:MM:DD
-        # ** In number context: YYYYMMDDHHMMDD
-        # this is stored as an int8
-        ColumnDefinition(u'a',
-            column_types.DATETIME,
-            8, 0x21,
-            decimals=0,
-            default=20070127110000L,
-            show_default=True,
-            seq_id=3
-            ),
-        ColumnDefinition(u'test',
-            column_types.LONG,
-            4, 0x21,
-            decimals=2,
-            default=1337,
-            show_default=True,
-            seq_id=4
-            ),
-        EOFPacket(session_obj.client_capabilities, seq_id=5, status_flags=session_obj.server_status)
-    ]
-    session_obj.send_payload(columns)
+    field_list = cli_con.get_field_list(table_name, wildcard)
+    results = ResultSetText(session_obj.client_capabilities,
+        flags=session_obj.server_status)
+    for colname, coltype, col_max_len, \
+            field_len, field_max_len, _, _ in field_list:
+        results.add_column(unicode(colname), coltype, field_len)
+    # TODO: server status negoatiation
+    tx_packets = results.columns
+    for i in range(0, len(tx_packets)):
+        tx_packets[i].seq_id = i+1
+    tx_eof = EOFPacket(
+        session_obj.client_capabilities,
+        status_flags=session_obj.server_status,
+        seq_id=len(tx_packets)+1)
+    tx_packets.append(tx_eof)
     return True
