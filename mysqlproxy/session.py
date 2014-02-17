@@ -17,17 +17,19 @@ import pymysql
 from pymysql.err import ProgrammingError, \
         OperationalError, InternalError
 import logging
+import traceback
 
 _LOG = logging.getLogger(__name__)
 
 # stuff that we will flat out not support no matter what
 # the target host reports in its capabilities
 SERVER_INCAPABILITIES = capabilities.COMPRESS \
-    | capabilities.SSL
+    | capabilities.SSL \
+    | capabilities.PLUGIN_AUTH
 
 # stuff that we will always support transparently
 PERMANENT_SERVER_CAPABILITIES = capabilities.PROTOCOL_41 \
-    | capabilities.SECURE_CONNECTION
+    | capabilities.SECURE_CONNECTION \
 
 PERMANENT_STATUS_FLAGS = status_flags.STATUS_AUTOCOMMIT
 
@@ -131,7 +133,6 @@ class SQLProxy(object):
         self.port = port
         self.user = user
         self.passwd = passwd
-
         unix_socket = kwargs.pop('socket', None)
         self.forward_auth = kwargs.pop('forward_auth', False)
         if self.forward_auth:
@@ -149,7 +150,6 @@ class SQLProxy(object):
         self.session = Session(client_fd, self, 
             (self.client_conn.server_capabilities | PERMANENT_SERVER_CAPABILITIES) \
                 & (0xffffffff ^ SERVER_INCAPABILITIES))
-
         self.plugins = PluginRegistry()
 
     def change_db(self, dbname):
@@ -178,32 +178,27 @@ class SQLProxy(object):
         Do the actual query on the target MySQL host.
         Returns a packet type of either OK, ERR, or a ResultSetText
         """
-        try:
-            cursor = self.client_conn.cursor()
-            num_rows = cursor.execute(query)
-            results = cursor.fetchall()
-            if not results or len(results) == 0:
-                cursor.close()
-                return OKPacket(self.session.client_capabilities,
-                    affected_rows=num_rows,
-                    last_insert_id=cursor.lastrowid,
-                    seq_id=1
-                    )
-            col_types = cursor.description
+        cursor = self.client_conn.cursor()
+        num_rows = cursor.execute(query)
+        results = cursor.fetchall()
+        if not results or len(results) == 0:
             cursor.close()
-            response = ResultSetText(self.session.client_capabilities,
-                flags=self.session.server_status)
-            for colname, coltype, col_max_len, \
-                    field_len, field_max_len, _, _ in col_types:
-                response.add_column(unicode(colname), coltype, field_len)
-            for row in results:
-                lvals = list(row)
-                response.add_row(lvals)
-            return response
-        except (InternalError, ProgrammingError, OperationalError) as ex:
-            err_code, err_msg = ex
-            return ERRPacket(self.session.client_capabilities,
-                error_code=err_code, error_msg=err_msg, seq_id=1)
+            return OKPacket(self.session.client_capabilities,
+                affected_rows=num_rows,
+                last_insert_id=cursor.lastrowid,
+                seq_id=1
+                )
+        col_types = cursor.description
+        cursor.close()
+        response = ResultSetText(self.session.client_capabilities,
+            flags=self.session.server_status)
+        for colname, coltype, col_max_len, \
+                field_len, field_max_len, _, _ in col_types:
+            response.add_column(unicode(colname), coltype, field_len)
+        for row in results:
+            lvals = list(row)
+            response.add_row(lvals)
+        return response
 
 
 class Session(object):
@@ -254,6 +249,7 @@ class Session(object):
                     self.connected = False
             except (InternalError, OperationalError, 
                     ProgrammingError) as ex:
+                traceback.print_exc()
                 self.send_payload(ERRPacket(self.client_capabilities,
                     9999, u'Error occured during operation: %s' % ex,
                     seq_id=1))
@@ -279,9 +275,9 @@ class Session(object):
 
         if self.proxy_obj.forward_auth:
             if not auth_response:
-                auth_response = '\0' # empty password
+                auth_response = b'\0' # empty password
             self.proxy_obj.client_conn.user = username
-            self.proxy_obj.client_conn._request_authentication(auth_response)
+            self.proxy_obj.client_conn.forward_authentication(auth_response)
             self.proxy_obj.client_conn.post_auth_routine()
             return True, True, cap_flags
 
@@ -354,6 +350,7 @@ class Session(object):
                         self.proxy_obj.client_conn.select_db(db_name)
                     except ValueError:
                         pass
+                    self.proxy_obj.client_conn.set_charset('utf8')
                     resp_pkt = OKPacket(client_caps,
                         affected_rows=0,
                         last_insert_id=0,
@@ -370,6 +367,7 @@ class Session(object):
             self.net_fd.flush()
             return authenticated
         except Exception as ex:
+            traceback.print_exc()
             ERRPacket(0, 9999, 'Internal Server Error: %s' % ex,
                 seq_id=last_seq_id).write_out(self.net_fd)
             return False

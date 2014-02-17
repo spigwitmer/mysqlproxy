@@ -45,6 +45,10 @@ class FieldDescriptorOrEOFPacket(FieldDescriptorPacket):
 
 
 class ProxyConnection(Connection):
+    def __init__(self, *largs, **kwargs):
+        self.forwarded_auth_response = None
+        Connection.__init__(self, *largs, **kwargs)
+
     def get_field_list(self, table_name, wildcard=None):
         ''' Get column information for a table '''
         table_name = table_name + '\x00'

@@ -36,7 +36,6 @@ class ForwardAuthConnection(ProxyConnection):
         and grab the salt.
         """
         sock = None
-        self.forwarded_auth_reseponse
         try:
             if self.unix_socket and self.host in ('localhost', '127.0.0.1'):
                 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -69,8 +68,8 @@ class ForwardAuthConnection(ProxyConnection):
             raise OperationalError(
                 2003, "Can't connect to MySQL server on %r (%s)" % (self.host, e))
 
-    def forward_authentication(self, auth_response='\0'):
-        self.forwarded_auth_reseponse = auth_response
+    def forward_authentication(self, auth_response=b'\0'):
+        self.forwarded_auth_response = auth_response
         self._request_authentication()
 
     def _request_authentication(self):
