@@ -11,6 +11,7 @@ from mysqlproxy import column_types, error_codes as errs
 from mysqlproxy.plugin import PluginRegistry
 from mysqlproxy.forward_auth import ForwardAuthConnection
 from mysqlproxy.client import ProxyConnection
+from mysqlproxy.charset import CHARSETS_BY_NAME
 from random import randint
 from hashlib import sha1
 import pymysql
@@ -133,6 +134,7 @@ class SQLProxy(object):
         self.port = port
         self.user = user
         self.passwd = passwd
+        self.charset_id = 0
         unix_socket = kwargs.pop('socket', None)
         self.forward_auth = kwargs.pop('forward_auth', False)
         if self.forward_auth:
@@ -169,6 +171,8 @@ class SQLProxy(object):
     def start(self):
         try:
             if self.session.do_handshake():
+                self.charset_id = \
+                    CHARSETS_BY_NAME[self.client_conn.character_set_name()][0]
                 self.session.serve_forever()
         finally:
             self.client_conn.close()
@@ -211,6 +215,7 @@ class Session(object):
     def __init__(self, fde, proxy_obj, server_capabilities):
         self.net_fd = fde
         self.connected = True
+        self.charset_id = 0
         self.default_db = None
         self.client_capabilities = 0
         self.server_capabilities = server_capabilities
@@ -272,6 +277,7 @@ class Session(object):
         self.client_capabilities = cap_flags
         username = response.get_field('username').val
         auth_response = response.get_field('auth_response').val
+        self.charset_id = response.get_field('charset').val
 
         if self.proxy_obj.forward_auth:
             if not auth_response:
