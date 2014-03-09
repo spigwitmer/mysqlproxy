@@ -288,8 +288,6 @@ class Session(object):
             return True, True, cap_flags
 
         if not cap_flags & capabilities.PROTOCOL_41:
-            # Forget about it, we will not support the
-            # 3.2 protocol
             return False, False, \
                 ERRPacket(cap_flags, error_code=1062,
                     error_msg='your client needs MySQL 4.1 protocol support to use mysqlproxy.',
