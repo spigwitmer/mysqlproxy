@@ -123,10 +123,11 @@ def cli_command_query(session_obj, pkt_data, code):
         response.add_column(col_name, column_types.VAR_STRING, len(row_val))
         response.add_row([row_val])
     else:
-        plugin_continue, plugin_ret = session_obj.plugins.call_hooks('com_query',
+        proxy = session_obj.proxy_obj
+        plugin_continue, plugin_ret = proxy.plugins.call_hooks('com_query',
             query, session_obj)
         if plugin_continue:
-            response = session_obj.proxy_obj.build_response_from_query(query)
+            response = proxy.build_response_from_query(query)
         else:
             response = plugin_ret
     session_obj.send_payload(response)
