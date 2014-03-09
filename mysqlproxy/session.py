@@ -19,6 +19,7 @@ from pymysql.err import ProgrammingError, \
         OperationalError, InternalError
 import logging
 import traceback
+import threading
 
 _LOG = logging.getLogger(__name__)
 
@@ -48,7 +49,8 @@ class HandshakeV10(Packet):
         self.fields = [
             ('protocol_version', FixedLengthInteger(1, 0x0a)),
             ('server_version', NulTerminatedString(u'5.5.11-mysqlproxy')),
-            ('connection_id', FixedLengthInteger(4, 4)),
+            ('connection_id', FixedLengthInteger(4,\
+                kwargs.pop('connection_id', threading.current_thread().ident % (1<<32)))),
             ('auth_data_1', FixedLengthString(8, bytes(nonce[:8]))),
             ('filler', FixedLengthInteger(1, 0)),
             ('cap_flags_lower', FixedLengthInteger(2, server_capabilities & 0xffff)),
